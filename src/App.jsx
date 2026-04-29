@@ -1,89 +1,99 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Euro, Target, BarChart3, History, CalendarDays, Search, LogOut, Loader2, AlertCircle, Key, X } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Euro, Target, BarChart3, History, CalendarDays, Search, LogOut, Loader2, AlertCircle, Key, X, Check, Wifi, WifiOff, Cloud, CloudOff } from 'lucide-react';
 
-// ============== SUPABASE CONFIG ==============
+// ============== CONFIG ==============
 const SUPABASE_URL = 'https://yxfanlgklvpdpsrzcoqy.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SA4vTbf1FfOH2YNHtw3LJg_geqlOxpV';
+const CACHE_KEY = 'stats_leads_cache_v2';
+const SESSION_KEY = 'stats_leads_session_v2';
 
-// ============== AUTH SYSTEM (custom username/password) ==============
-const auth = {
-  _user: null,
+// ============== API CLIENT ==============
+const api = {
+  _session: null,
   _listeners: [],
-  init() {
-    try {
-      const raw = localStorage.getItem('app_user');
-      if (raw) this._user = JSON.parse(raw);
-    } catch (e) {}
-  },
-  getUser() { return this._user; },
-  setUser(u) {
-    this._user = u;
-    if (u) localStorage.setItem('app_user', JSON.stringify(u));
-    else localStorage.removeItem('app_user');
-    this._listeners.forEach(cb => cb(u));
-  },
-  onChange(cb) { this._listeners.push(cb); return () => { this._listeners = this._listeners.filter(x => x !== cb); }; },
+  _saveStatus: 'idle',
+  _saveListeners: [],
 
-  async _rpc(fn, body) {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-      body: JSON.stringify(body),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.message || data.error || 'Erreur');
-    return data;
+  init() {
+    try { const raw = localStorage.getItem(SESSION_KEY); if (raw) this._session = JSON.parse(raw); } catch (e) {}
+  },
+  getSession() { return this._session; },
+  setSession(s) {
+    this._session = s;
+    if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+    else { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CACHE_KEY); }
+    this._listeners.forEach(cb => cb(s));
+  },
+  onSessionChange(cb) { this._listeners.push(cb); return () => { this._listeners = this._listeners.filter(x => x !== cb); }; },
+
+  setSaveStatus(s) { this._saveStatus = s; this._saveListeners.forEach(cb => cb(s)); },
+  onSaveStatusChange(cb) { this._saveListeners.push(cb); return () => { this._saveListeners = this._saveListeners.filter(x => x !== cb); }; },
+
+  async _rpc(fn, body, { silentSave = false } = {}) {
+    if (!silentSave) this.setSaveStatus('saving');
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        // Session expirée → déconnexion auto
+        if (data.code === 'P0002' || (typeof data.message === 'string' && data.message.includes('Session'))) {
+          this.setSession(null);
+          throw new Error('Session expirée. Reconnexion nécessaire.');
+        }
+        throw new Error(data.message || data.error || 'Erreur serveur');
+      }
+      if (!silentSave) this.setSaveStatus('saved');
+      return data;
+    } catch (e) {
+      if (!silentSave) this.setSaveStatus('error');
+      throw e;
+    }
   },
 
   async login(username, password) {
-    const data = await this._rpc('login_app_user', { p_username: username.trim(), p_password: password });
+    const data = await this._rpc('login_v2', {
+      p_username: username.trim(),
+      p_password: password,
+      p_user_agent: navigator.userAgent.slice(0, 200),
+    }, { silentSave: true });
     if (!data || data.length === 0) throw new Error('Identifiants incorrects');
-    const user = { id: data[0].user_id, username: username.trim().toLowerCase(), display_name: data[0].display_name };
-    this.setUser(user);
-    return user;
+    const session = { token: data[0].token, user_id: data[0].user_id, username: data[0].username, display_name: data[0].display_name };
+    this.setSession(session);
+    return session;
   },
 
-  async changePassword(oldPwd, newPwd) {
-    if (!this._user) throw new Error('Non connecté');
-    const ok = await this._rpc('change_app_password', { p_user_id: this._user.id, p_old_password: oldPwd, p_new_password: newPwd });
-    if (!ok) throw new Error('Ancien mot de passe incorrect');
-    return true;
-  },
-
-  logout() { this.setUser(null); },
-};
-auth.init();
-
-// ============== DATABASE HELPERS ==============
-const db = {
-  async req(method, path, body) {
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        apikey: SUPABASE_KEY,
-        Authorization: `Bearer ${SUPABASE_KEY}`,
-        Prefer: 'return=representation',
-      },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!r.ok) {
-      const txt = await r.text();
-      throw new Error(`DB ${r.status}: ${txt}`);
+  async logout() {
+    if (this._session?.token) {
+      try { await this._rpc('logout_v2', { p_token: this._session.token }, { silentSave: true }); } catch (e) {}
     }
-    if (r.status === 204) return null;
-    return r.json();
+    this.setSession(null);
   },
+
+  async getWeeks() { return this._rpc('get_my_weeks', { p_token: this._session.token }, { silentSave: true }); },
+  async createWeek(date) { return this._rpc('create_week', { p_token: this._session.token, p_start_date: date }); },
+  async duplicateWeek(srcId, newDate) { return this._rpc('duplicate_week', { p_token: this._session.token, p_source_week_id: srcId, p_new_start_date: newDate }); },
+  async updateWeek(weekId, patch) { return this._rpc('update_week', { p_token: this._session.token, p_week_id: weekId, p_patch: patch }); },
+  async deleteWeek(weekId) { return this._rpc('delete_week', { p_token: this._session.token, p_week_id: weekId }); },
+  async addLeadSource(weekId, category, name) { return this._rpc('add_lead_source', { p_token: this._session.token, p_week_id: weekId, p_category: category, p_source_name: name }); },
+  async addSale(weekId, category, name) { return this._rpc('add_sale', { p_token: this._session.token, p_week_id: weekId, p_category: category, p_client_name: name }); },
+  async updateLeadSource(id, patch) { return this._rpc('update_lead_source', { p_token: this._session.token, p_id: id, p_patch: patch }); },
+  async updateSale(id, patch) { return this._rpc('update_sale', { p_token: this._session.token, p_id: id, p_patch: patch }); },
+  async deleteLeadSource(id) { return this._rpc('delete_lead_source', { p_token: this._session.token, p_id: id }); },
+  async deleteSale(id) { return this._rpc('delete_sale', { p_token: this._session.token, p_id: id }); },
+  async changePassword(oldP, newP) { return this._rpc('change_password_v2', { p_token: this._session.token, p_old_password: oldP, p_new_password: newP }, { silentSave: true }); },
 };
+api.init();
 
 // ============== HELPERS ==============
 const fmtEur = (n) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 }).format(n || 0);
 const fmtEurShort = (n) => Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(1)}k€` : `${(n || 0).toFixed(0)}€`;
 const fmtPct = (n) => `${(n || 0).toFixed(1)}%`;
 const margeColor = (n) => n > 0 ? 'text-emerald-400' : n < 0 ? 'text-rose-400' : 'text-slate-400';
-
 const MOIS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
-
 const toIsoDate = (d) => typeof d === 'string' ? d : d.toISOString().split('T')[0];
 const formatDate = (d) => { const date = new Date(d); return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`; };
 const getWeekRange = (s) => { const start = new Date(s); const end = new Date(start); end.setDate(start.getDate() + 7); return { start: formatDate(start), end: formatDate(end) }; };
@@ -114,12 +124,57 @@ const computeWeekStats = (w) => {
   };
 };
 
+// ============== TOAST CONTEXT ==============
+const ToastContext = React.createContext(null);
+function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+  const show = useCallback((msg, type = 'info') => {
+    const id = Math.random();
+    setToasts(t => [...t, { id, msg, type }]);
+    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3000);
+  }, []);
+  return (
+    <ToastContext.Provider value={show}>
+      {children}
+      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+        {toasts.map(t => (
+          <div key={t.id} className={`px-4 py-2 rounded-lg shadow-lg text-sm font-medium pointer-events-auto animate-in fade-in slide-in-from-bottom-2 ${
+            t.type === 'success' ? 'bg-emerald-600 text-white' : t.type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-700 text-white'
+          }`}>{t.msg}</div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+const useToast = () => React.useContext(ToastContext);
+
+// ============== CONFIRM MODAL ==============
+function ConfirmModal({ open, onClose, onConfirm, title, message, confirmText = 'Confirmer', danger = false }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-lg font-bold mb-2">{title}</h2>
+        <p className="text-sm text-slate-300 mb-5">{message}</p>
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Annuler</button>
+          <button onClick={() => { onConfirm(); onClose(); }} className={`px-4 py-2 rounded-lg text-sm font-medium ${danger ? 'bg-rose-600 hover:bg-rose-500' : 'bg-cyan-600 hover:bg-cyan-500'} text-white`}>{confirmText}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ============== APP ==============
 export default function App() {
-  const [user, setUser] = useState(auth.getUser());
-  useEffect(() => auth.onChange(setUser), []);
-  if (!user) return <LoginScreen />;
-  return <StatsLeads user={user} />;
+  return <ToastProvider><AppInner /></ToastProvider>;
+}
+
+function AppInner() {
+  const [session, setSession] = useState(api.getSession());
+  useEffect(() => api.onSessionChange(setSession), []);
+  if (!session) return <LoginScreen />;
+  return <StatsLeads session={session} />;
 }
 
 // ============== LOGIN ==============
@@ -128,15 +183,11 @@ function LoginScreen() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-
   const submit = async () => {
     setError(''); setLoading(true);
-    try {
-      await auth.login(username, password);
-    } catch (e) { setError(e.message); }
+    try { await api.login(username, password); } catch (e) { setError(e.message); }
     setLoading(false);
   };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-slate-700/50 shadow-2xl p-8">
@@ -147,59 +198,43 @@ function LoginScreen() {
           <h1 className="text-2xl font-bold text-slate-100">Stats Leads</h1>
           <p className="text-sm text-slate-400 mt-1">Connecte-toi à ton tableau de bord</p>
         </div>
-
         <div className="space-y-3">
           <div>
             <label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Prénom</label>
-            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none"
-              placeholder="greg, sacha, elie..." autoComplete="username" autoCapitalize="none" />
+            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none" placeholder="greg, sacha, elie..." autoComplete="username" autoCapitalize="none" />
           </div>
           <div>
             <label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Mot de passe</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && submit()}
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none"
-              placeholder="••••••••" autoComplete="current-password" />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none" placeholder="••••••••" autoComplete="current-password" />
           </div>
-
-          {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300 flex items-start gap-2">
-            <AlertCircle size={16} className="mt-0.5 shrink-0" /> {error}
-          </div>}
-
-          <button onClick={submit} disabled={loading || !username || !password}
-            className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg py-2.5 shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2">
-            {loading && <Loader2 size={16} className="animate-spin" />}
-            Se connecter
+          {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300 flex items-start gap-2"><AlertCircle size={16} className="mt-0.5 shrink-0" /> {error}</div>}
+          <button onClick={submit} disabled={loading || !username || !password} className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg py-2.5 shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2">
+            {loading && <Loader2 size={16} className="animate-spin" />}Se connecter
           </button>
         </div>
+        <div className="text-center mt-6 text-xs text-slate-500">Sécurisé • Données chiffrées • Sessions expirées après 30 jours</div>
       </div>
     </div>
   );
 }
 
-// ============== CHANGE PASSWORD MODAL ==============
+// ============== CHANGE PASSWORD ==============
 function ChangePasswordModal({ onClose }) {
+  const toast = useToast();
   const [oldPwd, setOldPwd] = useState('');
   const [newPwd, setNewPwd] = useState('');
   const [newPwd2, setNewPwd2] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
-
   const submit = async () => {
     setError('');
     if (newPwd !== newPwd2) return setError('Les nouveaux mots de passe ne correspondent pas');
     if (newPwd.length < 6) return setError('Le nouveau mot de passe doit faire au moins 6 caractères');
     setLoading(true);
-    try {
-      await auth.changePassword(oldPwd, newPwd);
-      setSuccess(true);
-      setTimeout(onClose, 1500);
-    } catch (e) { setError(e.message); }
+    try { await api.changePassword(oldPwd, newPwd); toast('Mot de passe changé !', 'success'); onClose(); }
+    catch (e) { setError(e.message); }
     setLoading(false);
   };
-
   return (
     <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-slate-900 rounded-2xl border border-slate-700 p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
@@ -207,127 +242,106 @@ function ChangePasswordModal({ onClose }) {
           <h2 className="text-lg font-bold flex items-center gap-2"><Key size={18} className="text-cyan-400" /> Changer mon mot de passe</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-200"><X size={18} /></button>
         </div>
-
-        {success ? (
-          <div className="text-emerald-400 py-4 text-center">✓ Mot de passe changé !</div>
-        ) : (
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-slate-400 mb-1 block">Mot de passe actuel</label>
-              <input type="password" value={oldPwd} onChange={(e) => setOldPwd(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-400 mb-1 block">Nouveau mot de passe</label>
-              <input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-400 mb-1 block">Confirmer le nouveau mot de passe</label>
-              <input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && submit()}
-                className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" />
-            </div>
-
-            {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300">{error}</div>}
-
-            <button onClick={submit} disabled={loading || !oldPwd || !newPwd || !newPwd2}
-              className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 text-white font-medium rounded-lg py-2 flex items-center justify-center gap-2">
-              {loading && <Loader2 size={16} className="animate-spin" />}
-              Changer le mot de passe
-            </button>
-          </div>
-        )}
+        <div className="space-y-3">
+          <div><label className="text-xs text-slate-400 mb-1 block">Mot de passe actuel</label><input type="password" value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" /></div>
+          <div><label className="text-xs text-slate-400 mb-1 block">Nouveau mot de passe</label><input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" /></div>
+          <div><label className="text-xs text-slate-400 mb-1 block">Confirmer le nouveau mot de passe</label><input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" /></div>
+          {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300">{error}</div>}
+          <button onClick={submit} disabled={loading || !oldPwd || !newPwd || !newPwd2} className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 text-white font-medium rounded-lg py-2 flex items-center justify-center gap-2">
+            {loading && <Loader2 size={16} className="animate-spin" />}Changer
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// ============== MAIN APP ==============
-function StatsLeads({ user }) {
-  const [weeks, setWeeks] = useState([]);
+// ============== MAIN ==============
+function StatsLeads({ session }) {
+  const toast = useToast();
+  const [weeks, setWeeks] = useState(() => {
+    try { const c = localStorage.getItem(CACHE_KEY); return c ? JSON.parse(c) : []; } catch (e) { return []; }
+  });
   const [currentWeekId, setCurrentWeekId] = useState(null);
   const [activeTab, setActiveTab] = useState('week');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showChangePwd, setShowChangePwd] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  const [online, setOnline] = useState(navigator.onLine);
+  const [saveStatus, setSaveStatus] = useState('idle');
 
-  const defaultIteSources = ['GOOGLE - ITE CESAR PREMIUM (ELS 3)', 'PREMIUM SEARCH ITE (ELS 2)', 'FACEBOOK'];
-  const defaultPvSources = ['LEAD PV NEW (ELS 2)', 'PANNEAU SOLAIRE AIDES (ELS 3)', 'PREMIUM SEARCH PV', 'FACEBOOK'];
+  useEffect(() => {
+    const u = api.onSaveStatusChange(setSaveStatus);
+    const goOnline = () => setOnline(true);
+    const goOffline = () => setOnline(false);
+    window.addEventListener('online', goOnline);
+    window.addEventListener('offline', goOffline);
+    return () => { u(); window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
+  }, []);
+
+  // Cache local
+  useEffect(() => {
+    try { if (weeks.length) localStorage.setItem(CACHE_KEY, JSON.stringify(weeks)); } catch (e) {}
+  }, [weeks]);
 
   const loadWeeks = useCallback(async () => {
     try {
-      const data = await db.req('GET', `weeks?user_id=eq.${user.id}&select=*,lead_sources(*),sales(*)&order=start_date.desc`);
+      const data = await api.getWeeks();
       setWeeks(data || []);
       if (data?.length > 0) {
         if (!currentWeekId || !data.find(w => w.id === currentWeekId)) setCurrentWeekId(data[0].id);
       } else {
-        await createWeekWithDefaults(getCurrentMonday());
+        const w = await api.createWeek(getCurrentMonday());
+        const fresh = await api.getWeeks();
+        setWeeks(fresh || []);
+        setCurrentWeekId(w.id);
       }
-    } catch (e) { setError(e.message); }
+    } catch (e) { setError(e.message); toast(e.message, 'error'); }
     setLoading(false);
-  }, [user.id, currentWeekId]);
+  }, [currentWeekId, toast]);
 
-  useEffect(() => { loadWeeks(); }, [user.id]); // eslint-disable-line
-
-  const createWeekWithDefaults = async (startDate) => {
-    try {
-      const [w] = await db.req('POST', 'weeks', [{ user_id: user.id, start_date: startDate, cesar_cost: 0, sacha_cost: 0 }]);
-      const sourcesPayload = [
-        ...defaultIteSources.map((name, i) => ({ week_id: w.id, category: 'ITE', source_name: name, cost: 0, leads: 0, position: i })),
-        ...defaultPvSources.map((name, i) => ({ week_id: w.id, category: 'PV', source_name: name, cost: 0, leads: 0, position: i })),
-      ];
-      const salesPayload = [
-        { week_id: w.id, category: 'ITE', client_name: 'GSH', ca: 0, marge: 0, leads: 0, position: 0 },
-        { week_id: w.id, category: 'PV', client_name: 'ALPHA CONNECT', ca: 0, marge: 0, leads: 0, position: 0 },
-      ];
-      await db.req('POST', 'lead_sources', sourcesPayload);
-      await db.req('POST', 'sales', salesPayload);
-      await loadWeeks();
-      setCurrentWeekId(w.id);
-    } catch (e) { setError(e.message); }
-  };
+  useEffect(() => { loadWeeks(); }, [session.user_id]); // eslint-disable-line
 
   const currentWeek = useMemo(() => weeks.find(w => w.id === currentWeekId), [weeks, currentWeekId]);
   const calc = useMemo(() => currentWeek ? computeWeekStats(currentWeek) : null, [currentWeek]);
   const sortedWeekIds = useMemo(() => weeks.map(w => w.id), [weeks]);
   const currentIdx = sortedWeekIds.indexOf(currentWeekId);
 
-  const patchWeek = async (weekId, patch) => {
-    setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, ...patch } : w));
-    try { await db.req('PATCH', `weeks?id=eq.${weekId}`, patch); }
-    catch (e) { setError(e.message); loadWeeks(); }
+  // Optimistic update + serveur en parallèle
+  const optimistic = (mutator, serverCall) => {
+    setWeeks(mutator);
+    serverCall().catch(e => { setError(e.message); toast(e.message, 'error'); loadWeeks(); });
   };
 
-  const updateRow = async (table, rowId, patch) => {
-    setWeeks(prev => prev.map(w => ({ ...w, [table]: w[table]?.map(r => r.id === rowId ? { ...r, ...patch } : r) })));
-    try { await db.req('PATCH', `${table}?id=eq.${rowId}`, patch); }
-    catch (e) { setError(e.message); loadWeeks(); }
-  };
+  const patchWeek = (weekId, patch) => optimistic(
+    prev => prev.map(w => w.id === weekId ? { ...w, ...patch } : w),
+    () => api.updateWeek(weekId, patch)
+  );
 
-  const deleteRow = async (table, rowId, weekId) => {
-    setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, [table]: w[table].filter(r => r.id !== rowId) } : w));
-    try { await db.req('DELETE', `${table}?id=eq.${rowId}`); }
-    catch (e) { setError(e.message); loadWeeks(); }
-  };
+  const updateRow = (table, rowId, patch) => optimistic(
+    prev => prev.map(w => ({ ...w, [table]: w[table]?.map(r => r.id === rowId ? { ...r, ...patch } : r) })),
+    () => table === 'lead_sources' ? api.updateLeadSource(rowId, patch) : api.updateSale(rowId, patch)
+  );
+
+  const deleteRow = (table, rowId, weekId) => optimistic(
+    prev => prev.map(w => w.id === weekId ? { ...w, [table]: w[table].filter(r => r.id !== rowId) } : w),
+    () => table === 'lead_sources' ? api.deleteLeadSource(rowId) : api.deleteSale(rowId)
+  );
 
   const addLeadSource = async (weekId, category) => {
     try {
-      const week = weeks.find(w => w.id === weekId);
-      const maxPos = Math.max(-1, ...(week?.lead_sources?.filter(x => x.category === category).map(x => x.position) || []));
-      const [row] = await db.req('POST', 'lead_sources', [{ week_id: weekId, category, source_name: 'Nouvelle source', cost: 0, leads: 0, position: maxPos + 1 }]);
+      const row = await api.addLeadSource(weekId, category, 'Nouvelle source');
       setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, lead_sources: [...(w.lead_sources || []), row] } : w));
-    } catch (e) { setError(e.message); }
+    } catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
 
-  const addSale = async (weekId, category) => {
+  const addSaleRow = async (weekId, category) => {
     try {
-      const week = weeks.find(w => w.id === weekId);
-      const maxPos = Math.max(-1, ...(week?.sales?.filter(x => x.category === category).map(x => x.position) || []));
-      const [row] = await db.req('POST', 'sales', [{ week_id: weekId, category, client_name: 'Nouveau client', ca: 0, marge: 0, leads: 0, position: maxPos + 1 }]);
+      const row = await api.addSale(weekId, category, 'Nouveau client');
       setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, sales: [...(w.sales || []), row] } : w));
-    } catch (e) { setError(e.message); }
+    } catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
 
   const newWeek = async () => {
@@ -336,7 +350,13 @@ function StatsLeads({ user }) {
     const newDate = toIsoDate(lastDate);
     const existing = weeks.find(w => w.start_date === newDate);
     if (existing) return setCurrentWeekId(existing.id);
-    await createWeekWithDefaults(newDate);
+    try {
+      const w = await api.createWeek(newDate);
+      const fresh = await api.getWeeks();
+      setWeeks(fresh || []);
+      setCurrentWeekId(w.id);
+      toast('Nouvelle semaine créée', 'success');
+    } catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
 
   const duplicateWeek = async () => {
@@ -346,34 +366,41 @@ function StatsLeads({ user }) {
     const existing = weeks.find(w => w.start_date === newDate);
     if (existing) return setCurrentWeekId(existing.id);
     try {
-      const [w] = await db.req('POST', 'weeks', [{ user_id: user.id, start_date: newDate, cesar_cost: 0, sacha_cost: 0 }]);
-      const sourcesPayload = (currentWeek.lead_sources || []).map(s => ({ week_id: w.id, category: s.category, source_name: s.source_name, cost: 0, leads: 0, position: s.position }));
-      const salesPayload = (currentWeek.sales || []).map(s => ({ week_id: w.id, category: s.category, client_name: s.client_name, ca: 0, marge: 0, leads: 0, position: s.position }));
-      if (sourcesPayload.length) await db.req('POST', 'lead_sources', sourcesPayload);
-      if (salesPayload.length) await db.req('POST', 'sales', salesPayload);
-      await loadWeeks();
+      const w = await api.duplicateWeek(currentWeek.id, newDate);
+      const fresh = await api.getWeeks();
+      setWeeks(fresh || []);
       setCurrentWeekId(w.id);
-    } catch (e) { setError(e.message); }
+      toast('Semaine dupliquée', 'success');
+    } catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
 
   const changeWeekDate = async (weekId, newDate) => {
-    const conflict = weeks.find(w => w.id !== weekId && w.start_date === newDate);
-    if (conflict) { setError('Une semaine existe déjà à cette date.'); setTimeout(() => setError(''), 3000); return; }
-    await patchWeek(weekId, { start_date: newDate });
-    setWeeks(prev => [...prev].sort((a, b) => b.start_date.localeCompare(a.start_date)));
+    try {
+      await api.updateWeek(weekId, { start_date: newDate });
+      const fresh = await api.getWeeks();
+      setWeeks(fresh || []);
+      toast('Date modifiée', 'success');
+    } catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
 
-  const deleteWeek = async (weekId) => {
-    if (!confirm('Supprimer cette semaine définitivement ?')) return;
-    try {
-      await db.req('DELETE', `weeks?id=eq.${weekId}`);
-      const newWeeks = weeks.filter(w => w.id !== weekId);
-      setWeeks(newWeeks);
-      if (currentWeekId === weekId) {
-        if (newWeeks.length > 0) setCurrentWeekId(newWeeks[0].id);
-        else await createWeekWithDefaults(getCurrentMonday());
+  const deleteWeek = (weekId) => {
+    setConfirm({
+      title: 'Supprimer cette semaine ?',
+      message: 'Cette action est définitive. Toutes les données de cette semaine seront perdues.',
+      danger: true, confirmText: 'Supprimer',
+      onConfirm: async () => {
+        try {
+          await api.deleteWeek(weekId);
+          const newWeeks = weeks.filter(w => w.id !== weekId);
+          setWeeks(newWeeks);
+          if (currentWeekId === weekId) {
+            if (newWeeks.length > 0) setCurrentWeekId(newWeeks[0].id);
+            else { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); }
+          }
+          toast('Semaine supprimée', 'success');
+        } catch (e) { setError(e.message); toast(e.message, 'error'); }
       }
-    } catch (e) { setError(e.message); }
+    });
   };
 
   const exportJSON = () => {
@@ -381,30 +408,45 @@ function StatsLeads({ user }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `stats-leads-${user.username}-${new Date().toISOString().split('T')[0]}.json`;
+    a.download = `stats-leads-${session.username}-${new Date().toISOString().split('T')[0]}.json`;
     a.click();
     URL.revokeObjectURL(url);
+    toast('Export téléchargé', 'success');
   };
 
-  if (loading) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="text-cyan-400 animate-spin" size={32} /></div>;
-  if (!currentWeek || !calc) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400"><div>Initialisation...</div></div>;
+  // Raccourcis clavier
+  useEffect(() => {
+    const handler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); newWeek(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'd') { e.preventDefault(); duplicateWeek(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'e') { e.preventDefault(); exportJSON(); }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }); // eslint-disable-line
 
+  if (loading && weeks.length === 0) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="text-cyan-400 animate-spin" size={32} /></div>;
+  if (!currentWeek || !calc) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400"><div>Initialisation...</div></div>;
   const range = getWeekRange(currentWeek.start_date);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
       {showChangePwd && <ChangePasswordModal onClose={() => setShowChangePwd(false)} />}
+      <ConfirmModal open={!!confirm} onClose={() => setConfirm(null)} {...(confirm || {})} />
 
       <div className="sticky top-0 z-20 bg-slate-950/80 backdrop-blur-lg border-b border-slate-800">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div className="flex items-center justify-between gap-3 md:gap-3">
+          <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
                 <BarChart3 size={20} className="text-white" />
               </div>
               <div>
-                <h1 className="font-bold text-base leading-tight">Stats Leads</h1>
-                <div className="text-xs text-slate-400">Connecté : <span className="text-cyan-300 font-medium">{user.display_name}</span></div>
+                <h1 className="font-bold text-base leading-tight flex items-center gap-2">
+                  Stats Leads
+                  <SaveBadge status={saveStatus} online={online} />
+                </h1>
+                <div className="text-xs text-slate-400">Connecté : <span className="text-cyan-300 font-medium">{session.display_name}</span></div>
               </div>
             </div>
             <div className="md:hidden relative">
@@ -412,25 +454,24 @@ function StatsLeads({ user }) {
                 <BarChart3 size={16} />
               </button>
               {showMenu && (
-                <div className="absolute right-0 top-full mt-2 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 min-w-[160px] z-30">
+                <div className="absolute right-0 top-full mt-2 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 min-w-[180px] z-30">
                   <button onClick={() => { exportJSON(); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Download size={14} /> Export</button>
-                  <button onClick={() => { setShowChangePwd(true); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Key size={14} /> Mot de passe</button>
-                  <button onClick={() => auth.logout()} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2 text-rose-300"><LogOut size={14} /> Déconnexion</button>
+                  <button onClick={() => { setShowChangePwd(true); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Key size={14} /> Changer mdp</button>
+                  <div className="border-t border-slate-800 my-1"></div>
+                  <button onClick={() => api.logout()} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2 text-rose-300"><LogOut size={14} /> Déconnexion</button>
                 </div>
               )}
             </div>
           </div>
-
           <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl p-1">
             <TabButton active={activeTab === 'week'} onClick={() => setActiveTab('week')} icon={<Calendar size={15} />}>Semaine</TabButton>
             <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={15} />}>Historique</TabButton>
             <TabButton active={activeTab === 'monthly'} onClick={() => setActiveTab('monthly')} icon={<CalendarDays size={15} />}>Mensuel</TabButton>
           </div>
-
           <div className="hidden md:flex items-center gap-2">
-            <button onClick={exportJSON} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700"><Download size={15} /> Export</button>
-            <button onClick={() => setShowChangePwd(true)} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700"><Key size={15} /></button>
-            <button onClick={() => auth.logout()} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700"><LogOut size={15} /></button>
+            <button onClick={exportJSON} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700" title="Exporter (Ctrl+E)"><Download size={15} /> Export</button>
+            <button onClick={() => setShowChangePwd(true)} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700" title="Changer mot de passe"><Key size={15} /></button>
+            <button onClick={() => api.logout()} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700" title="Déconnexion"><LogOut size={15} /></button>
           </div>
         </div>
         {error && (
@@ -442,16 +483,24 @@ function StatsLeads({ user }) {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {activeTab === 'week' && <WeekView currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={duplicateWeek} newWeek={newWeek} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSale} />}
+        {activeTab === 'week' && <WeekView currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={duplicateWeek} newWeek={newWeek} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSaleRow} />}
         {activeTab === 'history' && <HistoryView weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} deleteWeek={deleteWeek} />}
         {activeTab === 'monthly' && <MonthlyView weeks={weeks} />}
       </div>
 
       <div className="text-center text-xs text-slate-500 py-6">
-        {weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Données sauvegardées en ligne
+        {weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Sécurisé par token • <span className="hidden md:inline">Raccourcis : Ctrl+N (nouvelle), Ctrl+D (dupliquer), Ctrl+E (export)</span>
       </div>
     </div>
   );
+}
+
+function SaveBadge({ status, online }) {
+  if (!online) return <span className="inline-flex items-center gap-1 text-xs text-amber-400" title="Hors ligne"><CloudOff size={12} /></span>;
+  if (status === 'saving') return <span className="inline-flex items-center gap-1 text-xs text-cyan-400 animate-pulse" title="Sauvegarde en cours"><Cloud size={12} /></span>;
+  if (status === 'saved') return <span className="inline-flex items-center gap-1 text-xs text-emerald-400" title="Sauvegardé"><Check size={12} /></span>;
+  if (status === 'error') return <span className="inline-flex items-center gap-1 text-xs text-rose-400" title="Erreur"><AlertCircle size={12} /></span>;
+  return null;
 }
 
 function TabButton({ active, onClick, children, icon }) {
@@ -472,7 +521,7 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
                 <button onClick={() => setEditingDate(false)} className="text-xs text-slate-400">Annuler</button>
               </div>
             ) : (
-              <h2 className="text-xl md:text-3xl font-bold cursor-pointer hover:text-cyan-300 transition" onClick={() => setEditingDate(true)} title="Cliquer pour modifier la date de début">
+              <h2 className="text-xl md:text-3xl font-bold cursor-pointer hover:text-cyan-300 transition" onClick={() => setEditingDate(true)} title="Cliquer pour modifier la date">
                 Du <span className="text-cyan-300">{range.start}</span> au <span className="text-violet-300">{range.end}</span>
               </h2>
             )}
@@ -480,8 +529,8 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
           <div className="flex flex-wrap gap-2">
             <button onClick={() => currentIdx < sortedWeekIds.length - 1 && setCurrentWeekId(sortedWeekIds[currentIdx + 1])} disabled={currentIdx >= sortedWeekIds.length - 1} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700"><ChevronLeft size={16} /> Préc.</button>
             <button onClick={() => currentIdx > 0 && setCurrentWeekId(sortedWeekIds[currentIdx - 1])} disabled={currentIdx <= 0} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700">Suiv. <ChevronRight size={16} /></button>
-            <button onClick={duplicateWeek} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-indigo-500/20"><Copy size={16} /> Dupliquer</button>
-            <button onClick={newWeek} className="px-3 py-2 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-cyan-500/20"><Plus size={16} /> Nouvelle</button>
+            <button onClick={duplicateWeek} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-indigo-500/20" title="Ctrl+D"><Copy size={16} /> Dupliquer</button>
+            <button onClick={newWeek} className="px-3 py-2 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-cyan-500/20" title="Ctrl+N"><Plus size={16} /> Nouvelle</button>
           </div>
         </div>
       </div>
@@ -535,16 +584,10 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
 function HistoryView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab, deleteWeek }) {
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState('all');
-
-  const grouped = useMemo(() => {
-    const g = {};
-    weeks.forEach(w => { const mk = getMonthKey(w.start_date); if (!g[mk]) g[mk] = []; g[mk].push({ ...w, stats: computeWeekStats(w) }); });
-    return g;
-  }, [weeks]);
+  const grouped = useMemo(() => { const g = {}; weeks.forEach(w => { const mk = getMonthKey(w.start_date); if (!g[mk]) g[mk] = []; g[mk].push({ ...w, stats: computeWeekStats(w) }); }); return g; }, [weeks]);
   const allYears = useMemo(() => [...new Set(Object.keys(grouped).map(k => k.split('-')[0]))].sort((a, b) => b.localeCompare(a)), [grouped]);
   const filteredMonths = useMemo(() => Object.keys(grouped).filter(mk => yearFilter === 'all' || mk.startsWith(yearFilter)).filter(mk => { if (!search) return true; const label = getMonthLabel(mk).toLowerCase(); if (label.includes(search.toLowerCase())) return true; return grouped[mk].some(w => { const r = getWeekRange(w.start_date); return r.start.includes(search) || r.end.includes(search); }); }).sort((a, b) => b.localeCompare(a)), [grouped, yearFilter, search]);
   const totalStats = useMemo(() => { const all = weeks.map(w => computeWeekStats(w)); return all.reduce((acc, s) => ({ ca: acc.ca + s.totalCA, cost: acc.cost + s.totalCost, marge: acc.marge + s.totalMarge, leads: acc.leads + s.totalLeads }), { ca: 0, cost: 0, marge: 0, leads: 0 }); }, [weeks]);
-
   return (
     <div className="space-y-5">
       <div className="bg-gradient-to-r from-slate-900 to-slate-800/50 rounded-2xl border border-slate-700/50 p-5">
@@ -615,7 +658,6 @@ function MonthlyView({ weeks }) {
   const [selectedMonth, setSelectedMonth] = useState(sortedMonthKeys[0]);
   useEffect(() => { if (!sortedMonthKeys.includes(selectedMonth) && sortedMonthKeys.length > 0) setSelectedMonth(sortedMonthKeys[0]); }, [sortedMonthKeys, selectedMonth]);
   if (sortedMonthKeys.length === 0) return <div className="text-center py-12 text-slate-500">Aucune donnée</div>;
-
   const current = monthlyData[selectedMonth];
   const stats = current.stats;
   const cmIte = stats.iteLeadsCount > 0 ? stats.iteCost / stats.iteLeadsCount : 0;
@@ -626,7 +668,6 @@ function MonthlyView({ weeks }) {
   const prev = prevKey ? monthlyData[prevKey].stats : null;
   const variation = (curr, p) => p > 0 ? ((curr - p) / p) * 100 : null;
   const chartData = [...sortedMonthKeys].reverse().map(mk => ({ label: getMonthLabel(mk).split(' ')[0].slice(0, 3), ca: monthlyData[mk].stats.totalCA, cost: monthlyData[mk].stats.totalCost, marge: monthlyData[mk].stats.totalMarge, isSelected: mk === selectedMonth }));
-
   return (
     <div className="space-y-5">
       <div className="bg-gradient-to-r from-slate-900 to-slate-800/50 rounded-2xl border border-slate-700/50 p-5">
@@ -692,7 +733,7 @@ function KPI({ icon, label, value, color }) {
 function KPIBig({ icon, label, value, variation, color, inverseColor }) {
   const colors = { cyan: 'from-cyan-900/40 to-cyan-800/10 border-cyan-700/40 text-cyan-300', amber: 'from-amber-900/40 to-amber-800/10 border-amber-700/40 text-amber-300', emerald: 'from-emerald-900/40 to-emerald-800/10 border-emerald-700/40 text-emerald-300', rose: 'from-rose-900/40 to-rose-800/10 border-rose-700/40 text-rose-300', violet: 'from-violet-900/40 to-violet-800/10 border-violet-700/40 text-violet-300' };
   const varColor = variation === null ? 'text-slate-500' : (inverseColor ? (variation < 0 ? 'text-emerald-400' : 'text-rose-400') : (variation > 0 ? 'text-emerald-400' : variation < 0 ? 'text-rose-400' : 'text-slate-500'));
-  return <div className={`bg-gradient-to-br ${colors[color]} rounded-xl border p-4 shadow-lg`}><div className="flex items-center gap-2 text-xs uppercase tracking-wider opacity-80 mb-1">{icon}<span>{label}</span></div><div className="text-xl md:text-2xl font-bold text-slate-100">{value}</div>{variation !== null && <div className={`text-xs mt-1 font-medium ${varColor}`}>{variation > 0 ? '↑' : variation < 0 ? '↓' : '='} {Math.abs(variation).toFixed(1)}% vs mois précédent</div>}</div>;
+  return <div className={`bg-gradient-to-br ${colors[color]} rounded-xl border p-4 shadow-lg`}><div className="flex items-center gap-2 text-xs uppercase tracking-wider opacity-80 mb-1">{icon}<span>{label}</span></div><div className="text-xl md:text-2xl font-bold text-slate-100">{value}</div>{variation !== null && <div className={`text-xs mt-1 font-medium ${varColor}`}>{variation > 0 ? '↑' : variation < 0 ? '↓' : '='} {Math.abs(variation).toFixed(1)}% vs mois préc.</div>}</div>;
 }
 
 function Card({ title, accent, icon, children }) {
