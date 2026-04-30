@@ -1,78 +1,45 @@
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Euro, Target, BarChart3, History, CalendarDays, Search, LogOut, Loader2, AlertCircle, Key, X, Check, Wifi, WifiOff, Cloud, CloudOff } from 'lucide-react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Euro, Target, BarChart3, History, CalendarDays, Search, LogOut, Loader2, AlertCircle, Key, X, Check, Cloud, CloudOff, FileText, Receipt, Printer } from 'lucide-react';
 
-// ============== CONFIG ==============
 const SUPABASE_URL = 'https://yxfanlgklvpdpsrzcoqy.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SA4vTbf1FfOH2YNHtw3LJg_geqlOxpV';
-const CACHE_KEY = 'stats_leads_cache_v2';
+const CACHE_KEY = 'stats_leads_cache_v3';
 const SESSION_KEY = 'stats_leads_session_v2';
 
-// ============== API CLIENT ==============
+const PRODUCTS = [
+  { key: 'ITE', label: 'ITE', icon: '📥', color: 'cyan' },
+  { key: 'PV', label: 'PV', icon: '☀️', color: 'orange' },
+  { key: 'PAC', label: 'PAC', icon: '🔥', color: 'red' },
+];
+
 const api = {
-  _session: null,
-  _listeners: [],
-  _saveStatus: 'idle',
-  _saveListeners: [],
-
-  init() {
-    try { const raw = localStorage.getItem(SESSION_KEY); if (raw) this._session = JSON.parse(raw); } catch (e) {}
-  },
+  _session: null, _listeners: [], _saveStatus: 'idle', _saveListeners: [],
+  init() { try { const raw = localStorage.getItem(SESSION_KEY); if (raw) this._session = JSON.parse(raw); } catch (e) {} },
   getSession() { return this._session; },
-  setSession(s) {
-    this._session = s;
-    if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
-    else { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CACHE_KEY); }
-    this._listeners.forEach(cb => cb(s));
-  },
+  setSession(s) { this._session = s; if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s)); else { localStorage.removeItem(SESSION_KEY); localStorage.removeItem(CACHE_KEY); } this._listeners.forEach(cb => cb(s)); },
   onSessionChange(cb) { this._listeners.push(cb); return () => { this._listeners = this._listeners.filter(x => x !== cb); }; },
-
   setSaveStatus(s) { this._saveStatus = s; this._saveListeners.forEach(cb => cb(s)); },
   onSaveStatusChange(cb) { this._saveListeners.push(cb); return () => { this._saveListeners = this._saveListeners.filter(x => x !== cb); }; },
-
   async _rpc(fn, body, { silentSave = false } = {}) {
     if (!silentSave) this.setSaveStatus('saving');
     try {
-      const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-        body: JSON.stringify(body),
-      });
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, { method: 'POST', headers: { 'Content-Type': 'application/json', apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }, body: JSON.stringify(body) });
       const data = await r.json();
       if (!r.ok) {
-        // Session expirée → déconnexion auto
-        if (data.code === 'P0002' || (typeof data.message === 'string' && data.message.includes('Session'))) {
-          this.setSession(null);
-          throw new Error('Session expirée. Reconnexion nécessaire.');
-        }
+        if (data.code === 'P0002' || (typeof data.message === 'string' && data.message.includes('Session'))) { this.setSession(null); throw new Error('Session expirée. Reconnexion nécessaire.'); }
         throw new Error(data.message || data.error || 'Erreur serveur');
       }
       if (!silentSave) this.setSaveStatus('saved');
       return data;
-    } catch (e) {
-      if (!silentSave) this.setSaveStatus('error');
-      throw e;
-    }
+    } catch (e) { if (!silentSave) this.setSaveStatus('error'); throw e; }
   },
-
   async login(username, password) {
-    const data = await this._rpc('login_v2', {
-      p_username: username.trim(),
-      p_password: password,
-      p_user_agent: navigator.userAgent.slice(0, 200),
-    }, { silentSave: true });
+    const data = await this._rpc('login_v2', { p_username: username.trim(), p_password: password, p_user_agent: navigator.userAgent.slice(0, 200) }, { silentSave: true });
     if (!data || data.length === 0) throw new Error('Identifiants incorrects');
     const session = { token: data[0].token, user_id: data[0].user_id, username: data[0].username, display_name: data[0].display_name };
-    this.setSession(session);
-    return session;
+    this.setSession(session); return session;
   },
-
-  async logout() {
-    if (this._session?.token) {
-      try { await this._rpc('logout_v2', { p_token: this._session.token }, { silentSave: true }); } catch (e) {}
-    }
-    this.setSession(null);
-  },
-
+  async logout() { if (this._session?.token) { try { await this._rpc('logout_v2', { p_token: this._session.token }, { silentSave: true }); } catch (e) {} } this.setSession(null); },
   async getWeeks() { return this._rpc('get_my_weeks', { p_token: this._session.token }, { silentSave: true }); },
   async createWeek(date) { return this._rpc('create_week', { p_token: this._session.token, p_start_date: date }); },
   async duplicateWeek(srcId, newDate) { return this._rpc('duplicate_week', { p_token: this._session.token, p_source_week_id: srcId, p_new_start_date: newDate }); },
@@ -88,7 +55,6 @@ const api = {
 };
 api.init();
 
-// ============== HELPERS ==============
 const fmtEur = (n) => new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 2 }).format(n || 0);
 const fmtEurShort = (n) => Math.abs(n) >= 1000 ? `${(n / 1000).toFixed(1)}k€` : `${(n || 0).toFixed(0)}€`;
 const fmtPct = (n) => `${(n || 0).toFixed(1)}%`;
@@ -101,55 +67,55 @@ const getCurrentMonday = () => { const d = new Date(); const day = d.getDay(); c
 const getMonthKey = (s) => { const d = new Date(s); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const getMonthLabel = (key) => { const [y, m] = key.split('-'); return `${MOIS_FR[parseInt(m) - 1]} ${y}`; };
 
-const computeWeekStats = (w) => {
+const computeProductStats = (w, category) => {
   const sum = (arr, key) => arr.reduce((s, x) => s + (Number(x[key]) || 0), 0);
-  const iteLeads = w.lead_sources?.filter(x => x.category === 'ITE') || [];
-  const pvLeads = w.lead_sources?.filter(x => x.category === 'PV') || [];
-  const iteSales = w.sales?.filter(x => x.category === 'ITE') || [];
-  const pvSales = w.sales?.filter(x => x.category === 'PV') || [];
-  const iteCost = sum(iteLeads, 'cost'), iteLeadsCount = sum(iteLeads, 'leads'), iteCA = sum(iteSales, 'ca');
-  const iteMarge = iteCA - iteCost; // calcul auto
-  const pvCost = sum(pvLeads, 'cost'), pvLeadsCount = sum(pvLeads, 'leads'), pvCA = sum(pvSales, 'ca');
-  const cesarCost = Number(w.cesar_cost) || 0, sachaCost = Number(w.sacha_cost) || 0;
-  const totalCA = iteCA + pvCA, totalCost = iteCost + pvCost + cesarCost + sachaCost, totalMarge = totalCA - totalCost;
+  const leads = w.lead_sources?.filter(x => x.category === category) || [];
+  const sales = w.sales?.filter(x => x.category === category) || [];
+  const cost = sum(leads, 'cost');
+  const leadsCount = sum(leads, 'leads');
+  const ca = sum(sales, 'ca');
+  const salesLeads = sum(sales, 'leads');
+  const marge = ca - cost;
   return {
-    iteCost, iteLeadsCount, iteCA, iteMarge, pvCost, pvLeadsCount, pvCA,
-    pvMarge: pvCA - pvCost, cesarCost, sachaCost, cesarMarge: -cesarCost, sachaMarge: -sachaCost,
-    totalCA, totalCost, totalMarge, totalLeads: iteLeadsCount + pvLeadsCount,
-    cmIte: iteLeadsCount > 0 ? iteCost / iteLeadsCount : 0,
-    cmPv: pvLeadsCount > 0 ? pvCost / pvLeadsCount : 0,
-    iteMargePct: iteCost > 0 ? (iteMarge / iteCost) * 100 : 0,
-    pvMargePct: pvCost > 0 ? ((pvCA - pvCost) / pvCost) * 100 : 0,
-    totalMargePct: totalCost > 0 ? (totalMarge / totalCost) * 100 : 0,
-    iteLeads, pvLeads, iteSales, pvSales,
+    leads, sales, cost, leadsCount, ca, salesLeads, marge,
+    cm: leadsCount > 0 ? cost / leadsCount : 0,
+    margePct: cost > 0 ? (marge / cost) * 100 : 0,
   };
 };
 
-// ============== TOAST CONTEXT ==============
+const computeWeekStats = (w) => {
+  const ite = computeProductStats(w, 'ITE');
+  const pv = computeProductStats(w, 'PV');
+  const pac = computeProductStats(w, 'PAC');
+  const cesarCost = Number(w.cesar_cost) || 0;
+  const sachaCost = Number(w.sacha_cost) || 0;
+  const totalCA = ite.ca + pv.ca + pac.ca;
+  const totalCost = ite.cost + pv.cost + pac.cost + cesarCost + sachaCost;
+  const totalMarge = totalCA - totalCost;
+  return {
+    ite, pv, pac, cesarCost, sachaCost,
+    cesarMarge: -cesarCost, sachaMarge: -sachaCost,
+    totalCA, totalCost, totalMarge,
+    totalLeads: ite.leadsCount + pv.leadsCount + pac.leadsCount,
+    totalSalesLeads: ite.salesLeads + pv.salesLeads + pac.salesLeads,
+    totalMargePct: totalCost > 0 ? (totalMarge / totalCost) * 100 : 0,
+  };
+};
+
 const ToastContext = React.createContext(null);
 function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
-  const show = useCallback((msg, type = 'info') => {
-    const id = Math.random();
-    setToasts(t => [...t, { id, msg, type }]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3000);
-  }, []);
+  const show = useCallback((msg, type = 'info') => { const id = Math.random(); setToasts(t => [...t, { id, msg, type }]); setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 3000); }, []);
   return (
-    <ToastContext.Provider value={show}>
-      {children}
+    <ToastContext.Provider value={show}>{children}
       <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
-        {toasts.map(t => (
-          <div key={t.id} className={`px-4 py-2 rounded-lg shadow-lg text-sm font-medium pointer-events-auto animate-in fade-in slide-in-from-bottom-2 ${
-            t.type === 'success' ? 'bg-emerald-600 text-white' : t.type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-700 text-white'
-          }`}>{t.msg}</div>
-        ))}
+        {toasts.map(t => <div key={t.id} className={`px-4 py-2 rounded-lg shadow-lg text-sm font-medium pointer-events-auto ${t.type === 'success' ? 'bg-emerald-600 text-white' : t.type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-700 text-white'}`}>{t.msg}</div>)}
       </div>
     </ToastContext.Provider>
   );
 }
 const useToast = () => React.useContext(ToastContext);
 
-// ============== CONFIRM MODAL ==============
 function ConfirmModal({ open, onClose, onConfirm, title, message, confirmText = 'Confirmer', danger = false }) {
   if (!open) return null;
   return (
@@ -166,10 +132,7 @@ function ConfirmModal({ open, onClose, onConfirm, title, message, confirmText = 
   );
 }
 
-// ============== APP ==============
-export default function App() {
-  return <ToastProvider><AppInner /></ToastProvider>;
-}
+export default function App() { return <ToastProvider><AppInner /></ToastProvider>; }
 
 function AppInner() {
   const [session, setSession] = useState(api.getSession());
@@ -178,59 +141,41 @@ function AppInner() {
   return <StatsLeads session={session} />;
 }
 
-// ============== LOGIN ==============
 function LoginScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const submit = async () => {
-    setError(''); setLoading(true);
-    try { await api.login(username, password); } catch (e) { setError(e.message); }
-    setLoading(false);
-  };
+  const submit = async () => { setError(''); setLoading(true); try { await api.login(username, password); } catch (e) { setError(e.message); } setLoading(false); };
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md bg-slate-900/80 backdrop-blur-xl rounded-2xl border border-slate-700/50 shadow-2xl p-8">
         <div className="flex flex-col items-center mb-6">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/30 mb-3">
-            <BarChart3 size={28} className="text-white" />
-          </div>
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/30 mb-3"><BarChart3 size={28} className="text-white" /></div>
           <h1 className="text-2xl font-bold text-slate-100">Stats Leads</h1>
           <p className="text-sm text-slate-400 mt-1">Connecte-toi à ton tableau de bord</p>
         </div>
         <div className="space-y-3">
-          <div>
-            <label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Prénom</label>
-            <input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none" placeholder="greg, sacha, elie..." autoComplete="username" autoCapitalize="none" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Mot de passe</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none" placeholder="••••••••" autoComplete="current-password" />
-          </div>
+          <div><label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Prénom</label><input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none" placeholder="greg, sacha, elie..." autoComplete="username" autoCapitalize="none" /></div>
+          <div><label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Mot de passe</label><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none" placeholder="••••••••" autoComplete="current-password" /></div>
           {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300 flex items-start gap-2"><AlertCircle size={16} className="mt-0.5 shrink-0" /> {error}</div>}
-          <button onClick={submit} disabled={loading || !username || !password} className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium rounded-lg py-2.5 shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2">
+          <button onClick={submit} disabled={loading || !username || !password} className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 text-white font-medium rounded-lg py-2.5 shadow-lg shadow-cyan-500/20 flex items-center justify-center gap-2">
             {loading && <Loader2 size={16} className="animate-spin" />}Se connecter
           </button>
         </div>
-        <div className="text-center mt-6 text-xs text-slate-500">Sécurisé • Données chiffrées • Sessions expirées après 30 jours</div>
       </div>
     </div>
   );
 }
 
-// ============== CHANGE PASSWORD ==============
 function ChangePasswordModal({ onClose }) {
   const toast = useToast();
-  const [oldPwd, setOldPwd] = useState('');
-  const [newPwd, setNewPwd] = useState('');
-  const [newPwd2, setNewPwd2] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [oldPwd, setOldPwd] = useState(''); const [newPwd, setNewPwd] = useState(''); const [newPwd2, setNewPwd2] = useState('');
+  const [loading, setLoading] = useState(false); const [error, setError] = useState('');
   const submit = async () => {
     setError('');
-    if (newPwd !== newPwd2) return setError('Les nouveaux mots de passe ne correspondent pas');
-    if (newPwd.length < 6) return setError('Le nouveau mot de passe doit faire au moins 6 caractères');
+    if (newPwd !== newPwd2) return setError('Les mots de passe ne correspondent pas');
+    if (newPwd.length < 6) return setError('Minimum 6 caractères');
     setLoading(true);
     try { await api.changePassword(oldPwd, newPwd); toast('Mot de passe changé !', 'success'); onClose(); }
     catch (e) { setError(e.message); }
@@ -246,23 +191,18 @@ function ChangePasswordModal({ onClose }) {
         <div className="space-y-3">
           <div><label className="text-xs text-slate-400 mb-1 block">Mot de passe actuel</label><input type="password" value={oldPwd} onChange={(e) => setOldPwd(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" /></div>
           <div><label className="text-xs text-slate-400 mb-1 block">Nouveau mot de passe</label><input type="password" value={newPwd} onChange={(e) => setNewPwd(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" /></div>
-          <div><label className="text-xs text-slate-400 mb-1 block">Confirmer le nouveau mot de passe</label><input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" /></div>
+          <div><label className="text-xs text-slate-400 mb-1 block">Confirmer</label><input type="password" value={newPwd2} onChange={(e) => setNewPwd2(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" /></div>
           {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300">{error}</div>}
-          <button onClick={submit} disabled={loading || !oldPwd || !newPwd || !newPwd2} className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 text-white font-medium rounded-lg py-2 flex items-center justify-center gap-2">
-            {loading && <Loader2 size={16} className="animate-spin" />}Changer
-          </button>
+          <button onClick={submit} disabled={loading || !oldPwd || !newPwd || !newPwd2} className="w-full bg-gradient-to-r from-cyan-600 to-violet-600 hover:from-cyan-500 hover:to-violet-500 disabled:opacity-50 text-white font-medium rounded-lg py-2 flex items-center justify-center gap-2">{loading && <Loader2 size={16} className="animate-spin" />}Changer</button>
         </div>
       </div>
     </div>
   );
 }
 
-// ============== MAIN ==============
 function StatsLeads({ session }) {
   const toast = useToast();
-  const [weeks, setWeeks] = useState(() => {
-    try { const c = localStorage.getItem(CACHE_KEY); return c ? JSON.parse(c) : []; } catch (e) { return []; }
-  });
+  const [weeks, setWeeks] = useState(() => { try { const c = localStorage.getItem(CACHE_KEY); return c ? JSON.parse(c) : []; } catch (e) { return []; } });
   const [currentWeekId, setCurrentWeekId] = useState(null);
   const [activeTab, setActiveTab] = useState('week');
   const [loading, setLoading] = useState(true);
@@ -272,33 +212,23 @@ function StatsLeads({ session }) {
   const [confirm, setConfirm] = useState(null);
   const [online, setOnline] = useState(navigator.onLine);
   const [saveStatus, setSaveStatus] = useState('idle');
+  const [pdfMode, setPdfMode] = useState(null); // 'week' | 'invoice' | null
 
   useEffect(() => {
     const u = api.onSaveStatusChange(setSaveStatus);
-    const goOnline = () => setOnline(true);
-    const goOffline = () => setOnline(false);
-    window.addEventListener('online', goOnline);
-    window.addEventListener('offline', goOffline);
+    const goOnline = () => setOnline(true); const goOffline = () => setOnline(false);
+    window.addEventListener('online', goOnline); window.addEventListener('offline', goOffline);
     return () => { u(); window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
   }, []);
 
-  // Cache local
-  useEffect(() => {
-    try { if (weeks.length) localStorage.setItem(CACHE_KEY, JSON.stringify(weeks)); } catch (e) {}
-  }, [weeks]);
+  useEffect(() => { try { if (weeks.length) localStorage.setItem(CACHE_KEY, JSON.stringify(weeks)); } catch (e) {} }, [weeks]);
 
   const loadWeeks = useCallback(async () => {
     try {
       const data = await api.getWeeks();
       setWeeks(data || []);
-      if (data?.length > 0) {
-        if (!currentWeekId || !data.find(w => w.id === currentWeekId)) setCurrentWeekId(data[0].id);
-      } else {
-        const w = await api.createWeek(getCurrentMonday());
-        const fresh = await api.getWeeks();
-        setWeeks(fresh || []);
-        setCurrentWeekId(w.id);
-      }
+      if (data?.length > 0) { if (!currentWeekId || !data.find(w => w.id === currentWeekId)) setCurrentWeekId(data[0].id); }
+      else { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); }
     } catch (e) { setError(e.message); toast(e.message, 'error'); }
     setLoading(false);
   }, [currentWeekId, toast]);
@@ -310,117 +240,46 @@ function StatsLeads({ session }) {
   const sortedWeekIds = useMemo(() => weeks.map(w => w.id), [weeks]);
   const currentIdx = sortedWeekIds.indexOf(currentWeekId);
 
-  // Optimistic update + serveur en parallèle
   const optimistic = (mutator, serverCall) => {
     setWeeks(mutator);
     serverCall().catch(e => { setError(e.message); toast(e.message, 'error'); loadWeeks(); });
   };
-
-  const patchWeek = (weekId, patch) => optimistic(
-    prev => prev.map(w => w.id === weekId ? { ...w, ...patch } : w),
-    () => api.updateWeek(weekId, patch)
-  );
-
-  const updateRow = (table, rowId, patch) => optimistic(
-    prev => prev.map(w => ({ ...w, [table]: w[table]?.map(r => r.id === rowId ? { ...r, ...patch } : r) })),
-    () => table === 'lead_sources' ? api.updateLeadSource(rowId, patch) : api.updateSale(rowId, patch)
-  );
-
-  const deleteRow = (table, rowId, weekId) => optimistic(
-    prev => prev.map(w => w.id === weekId ? { ...w, [table]: w[table].filter(r => r.id !== rowId) } : w),
-    () => table === 'lead_sources' ? api.deleteLeadSource(rowId) : api.deleteSale(rowId)
-  );
-
-  const addLeadSource = async (weekId, category) => {
-    try {
-      const row = await api.addLeadSource(weekId, category, 'Nouvelle source');
-      setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, lead_sources: [...(w.lead_sources || []), row] } : w));
-    } catch (e) { setError(e.message); toast(e.message, 'error'); }
-  };
-
-  const addSaleRow = async (weekId, category) => {
-    try {
-      const row = await api.addSale(weekId, category, 'Nouveau client');
-      setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, sales: [...(w.sales || []), row] } : w));
-    } catch (e) { setError(e.message); toast(e.message, 'error'); }
-  };
-
+  const patchWeek = (weekId, patch) => optimistic(prev => prev.map(w => w.id === weekId ? { ...w, ...patch } : w), () => api.updateWeek(weekId, patch));
+  const updateRow = (table, rowId, patch) => optimistic(prev => prev.map(w => ({ ...w, [table]: w[table]?.map(r => r.id === rowId ? { ...r, ...patch } : r) })), () => table === 'lead_sources' ? api.updateLeadSource(rowId, patch) : api.updateSale(rowId, patch));
+  const deleteRow = (table, rowId, weekId) => optimistic(prev => prev.map(w => w.id === weekId ? { ...w, [table]: w[table].filter(r => r.id !== rowId) } : w), () => table === 'lead_sources' ? api.deleteLeadSource(rowId) : api.deleteSale(rowId));
+  const addLeadSource = async (weekId, category) => { try { const row = await api.addLeadSource(weekId, category, 'Nouvelle source'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, lead_sources: [...(w.lead_sources || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
+  const addSaleRow = async (weekId, category) => { try { const row = await api.addSale(weekId, category, 'Nouveau client'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, sales: [...(w.sales || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
   const newWeek = async () => {
     if (!currentWeek) return;
     const lastDate = new Date(currentWeek.start_date); lastDate.setDate(lastDate.getDate() + 7);
     const newDate = toIsoDate(lastDate);
     const existing = weeks.find(w => w.start_date === newDate);
     if (existing) return setCurrentWeekId(existing.id);
-    try {
-      const w = await api.createWeek(newDate);
-      const fresh = await api.getWeeks();
-      setWeeks(fresh || []);
-      setCurrentWeekId(w.id);
-      toast('Nouvelle semaine créée', 'success');
-    } catch (e) { setError(e.message); toast(e.message, 'error'); }
+    try { const w = await api.createWeek(newDate); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); toast('Nouvelle semaine créée', 'success'); }
+    catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
-
   const duplicateWeek = async () => {
     if (!currentWeek) return;
     const lastDate = new Date(currentWeek.start_date); lastDate.setDate(lastDate.getDate() + 7);
     const newDate = toIsoDate(lastDate);
     const existing = weeks.find(w => w.start_date === newDate);
     if (existing) return setCurrentWeekId(existing.id);
-    try {
-      const w = await api.duplicateWeek(currentWeek.id, newDate);
-      const fresh = await api.getWeeks();
-      setWeeks(fresh || []);
-      setCurrentWeekId(w.id);
-      toast('Semaine dupliquée', 'success');
-    } catch (e) { setError(e.message); toast(e.message, 'error'); }
+    try { const w = await api.duplicateWeek(currentWeek.id, newDate); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); toast('Semaine dupliquée', 'success'); }
+    catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
-
-  const changeWeekDate = async (weekId, newDate) => {
-    try {
-      await api.updateWeek(weekId, { start_date: newDate });
-      const fresh = await api.getWeeks();
-      setWeeks(fresh || []);
-      toast('Date modifiée', 'success');
-    } catch (e) { setError(e.message); toast(e.message, 'error'); }
-  };
-
+  const changeWeekDate = async (weekId, newDate) => { try { await api.updateWeek(weekId, { start_date: newDate }); const fresh = await api.getWeeks(); setWeeks(fresh || []); toast('Date modifiée', 'success'); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
   const deleteWeek = (weekId) => {
-    setConfirm({
-      title: 'Supprimer cette semaine ?',
-      message: 'Cette action est définitive. Toutes les données de cette semaine seront perdues.',
-      danger: true, confirmText: 'Supprimer',
-      onConfirm: async () => {
-        try {
-          await api.deleteWeek(weekId);
-          const newWeeks = weeks.filter(w => w.id !== weekId);
-          setWeeks(newWeeks);
-          if (currentWeekId === weekId) {
-            if (newWeeks.length > 0) setCurrentWeekId(newWeeks[0].id);
-            else { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); }
-          }
-          toast('Semaine supprimée', 'success');
-        } catch (e) { setError(e.message); toast(e.message, 'error'); }
-      }
+    setConfirm({ title: 'Supprimer cette semaine ?', message: 'Cette action est définitive.', danger: true, confirmText: 'Supprimer',
+      onConfirm: async () => { try { await api.deleteWeek(weekId); const newWeeks = weeks.filter(w => w.id !== weekId); setWeeks(newWeeks); if (currentWeekId === weekId) { if (newWeeks.length > 0) setCurrentWeekId(newWeeks[0].id); else { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); } } toast('Semaine supprimée', 'success'); } catch (e) { setError(e.message); toast(e.message, 'error'); } }
     });
   };
+  const exportJSON = () => { const blob = new Blob([JSON.stringify(weeks, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `stats-leads-${session.username}-${new Date().toISOString().split('T')[0]}.json`; a.click(); URL.revokeObjectURL(url); toast('Export téléchargé', 'success'); };
 
-  const exportJSON = () => {
-    const blob = new Blob([JSON.stringify(weeks, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `stats-leads-${session.username}-${new Date().toISOString().split('T')[0]}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast('Export téléchargé', 'success');
-  };
-
-  // Raccourcis clavier
   useEffect(() => {
     const handler = (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); newWeek(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'd') { e.preventDefault(); duplicateWeek(); }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'e') { e.preventDefault(); exportJSON(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'p') { e.preventDefault(); setPdfMode('week'); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -434,30 +293,28 @@ function StatsLeads({ session }) {
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
       {showChangePwd && <ChangePasswordModal onClose={() => setShowChangePwd(false)} />}
       <ConfirmModal open={!!confirm} onClose={() => setConfirm(null)} {...(confirm || {})} />
+      {pdfMode === 'week' && <WeekPdfModal currentWeek={currentWeek} calc={calc} range={range} session={session} onClose={() => setPdfMode(null)} />}
+      {pdfMode === 'invoice' && <InvoicePdfModal currentWeek={currentWeek} calc={calc} range={range} session={session} onClose={() => setPdfMode(null)} />}
 
       <div className="sticky top-0 z-20 bg-slate-950/80 backdrop-blur-lg border-b border-slate-800">
         <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
-                <BarChart3 size={20} className="text-white" />
-              </div>
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/20"><BarChart3 size={20} className="text-white" /></div>
               <div>
-                <h1 className="font-bold text-base leading-tight flex items-center gap-2">
-                  Stats Leads
-                  <SaveBadge status={saveStatus} online={online} />
-                </h1>
+                <h1 className="font-bold text-base leading-tight flex items-center gap-2">Stats Leads<SaveBadge status={saveStatus} online={online} /></h1>
                 <div className="text-xs text-slate-400">Connecté : <span className="text-cyan-300 font-medium">{session.display_name}</span></div>
               </div>
             </div>
             <div className="md:hidden relative">
-              <button onClick={() => setShowMenu(!showMenu)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700">
-                <BarChart3 size={16} />
-              </button>
+              <button onClick={() => setShowMenu(!showMenu)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700"><BarChart3 size={16} /></button>
               {showMenu && (
-                <div className="absolute right-0 top-full mt-2 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 min-w-[180px] z-30">
-                  <button onClick={() => { exportJSON(); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Download size={14} /> Export</button>
-                  <button onClick={() => { setShowChangePwd(true); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Key size={14} /> Changer mdp</button>
+                <div className="absolute right-0 top-full mt-2 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 min-w-[200px] z-30">
+                  <button onClick={() => { setPdfMode('week'); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><FileText size={14} /> PDF semaine</button>
+                  <button onClick={() => { setPdfMode('invoice'); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Receipt size={14} /> À facturer</button>
+                  <div className="border-t border-slate-800 my-1"></div>
+                  <button onClick={() => { exportJSON(); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Download size={14} /> Export JSON</button>
+                  <button onClick={() => { setShowChangePwd(true); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Key size={14} /> Mot de passe</button>
                   <div className="border-t border-slate-800 my-1"></div>
                   <button onClick={() => api.logout()} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2 text-rose-300"><LogOut size={14} /> Déconnexion</button>
                 </div>
@@ -470,17 +327,14 @@ function StatsLeads({ session }) {
             <TabButton active={activeTab === 'monthly'} onClick={() => setActiveTab('monthly')} icon={<CalendarDays size={15} />}>Mensuel</TabButton>
           </div>
           <div className="hidden md:flex items-center gap-2">
-            <button onClick={exportJSON} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700" title="Exporter (Ctrl+E)"><Download size={15} /> Export</button>
-            <button onClick={() => setShowChangePwd(true)} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700" title="Changer mot de passe"><Key size={15} /></button>
-            <button onClick={() => api.logout()} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700" title="Déconnexion"><LogOut size={15} /></button>
+            <button onClick={() => setPdfMode('week')} className="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 rounded-lg flex items-center gap-1.5 text-sm font-medium" title="PDF Semaine (Ctrl+P)"><FileText size={15} /> PDF</button>
+            <button onClick={() => setPdfMode('invoice')} className="px-3 py-2 bg-amber-700 hover:bg-amber-600 rounded-lg flex items-center gap-1.5 text-sm font-medium" title="À facturer"><Receipt size={15} /> Factures</button>
+            <button onClick={exportJSON} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700"><Download size={15} /></button>
+            <button onClick={() => setShowChangePwd(true)} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700"><Key size={15} /></button>
+            <button onClick={() => api.logout()} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700"><LogOut size={15} /></button>
           </div>
         </div>
-        {error && (
-          <div className="bg-rose-900/30 border-t border-rose-800/50 px-4 py-2 text-sm text-rose-300 flex items-center gap-2">
-            <AlertCircle size={14} /> {error}
-            <button onClick={() => setError('')} className="ml-auto text-xs hover:text-rose-100">×</button>
-          </div>
-        )}
+        {error && (<div className="bg-rose-900/30 border-t border-rose-800/50 px-4 py-2 text-sm text-rose-300 flex items-center gap-2"><AlertCircle size={14} /> {error}<button onClick={() => setError('')} className="ml-auto text-xs hover:text-rose-100">×</button></div>)}
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
@@ -489,18 +343,16 @@ function StatsLeads({ session }) {
         {activeTab === 'monthly' && <MonthlyView weeks={weeks} />}
       </div>
 
-      <div className="text-center text-xs text-slate-500 py-6">
-        {weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Sécurisé par token • <span className="hidden md:inline">Raccourcis : Ctrl+N (nouvelle), Ctrl+D (dupliquer), Ctrl+E (export)</span>
-      </div>
+      <div className="text-center text-xs text-slate-500 py-6">{weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Sécurisé par token • <span className="hidden md:inline">Ctrl+N (nouvelle), Ctrl+D (dupliquer), Ctrl+P (PDF)</span></div>
     </div>
   );
 }
 
 function SaveBadge({ status, online }) {
-  if (!online) return <span className="inline-flex items-center gap-1 text-xs text-amber-400" title="Hors ligne"><CloudOff size={12} /></span>;
-  if (status === 'saving') return <span className="inline-flex items-center gap-1 text-xs text-cyan-400 animate-pulse" title="Sauvegarde en cours"><Cloud size={12} /></span>;
-  if (status === 'saved') return <span className="inline-flex items-center gap-1 text-xs text-emerald-400" title="Sauvegardé"><Check size={12} /></span>;
-  if (status === 'error') return <span className="inline-flex items-center gap-1 text-xs text-rose-400" title="Erreur"><AlertCircle size={12} /></span>;
+  if (!online) return <span title="Hors ligne"><CloudOff size={12} className="text-amber-400" /></span>;
+  if (status === 'saving') return <span title="Sauvegarde"><Cloud size={12} className="text-cyan-400 animate-pulse" /></span>;
+  if (status === 'saved') return <span title="Sauvegardé"><Check size={12} className="text-emerald-400" /></span>;
+  if (status === 'error') return <span title="Erreur"><AlertCircle size={12} className="text-rose-400" /></span>;
   return null;
 }
 
@@ -517,21 +369,16 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
           <div>
             <div className="text-xs uppercase tracking-widest text-cyan-400 mb-1 flex items-center gap-2"><Calendar size={14} /> Semaine en cours</div>
             {editingDate ? (
-              <div className="flex items-center gap-2">
-                <input type="date" defaultValue={currentWeek.start_date} onBlur={async (e) => { await changeWeekDate(currentWeek.id, e.target.value); setEditingDate(false); }} onKeyDown={async (e) => { if (e.key === 'Enter') { await changeWeekDate(currentWeek.id, e.target.value); setEditingDate(false); } if (e.key === 'Escape') setEditingDate(false); }} autoFocus className="bg-slate-800 border border-cyan-500 rounded-lg px-3 py-1.5 text-slate-100" />
-                <button onClick={() => setEditingDate(false)} className="text-xs text-slate-400">Annuler</button>
-              </div>
+              <div className="flex items-center gap-2"><input type="date" defaultValue={currentWeek.start_date} onBlur={async (e) => { await changeWeekDate(currentWeek.id, e.target.value); setEditingDate(false); }} onKeyDown={async (e) => { if (e.key === 'Enter') { await changeWeekDate(currentWeek.id, e.target.value); setEditingDate(false); } if (e.key === 'Escape') setEditingDate(false); }} autoFocus className="bg-slate-800 border border-cyan-500 rounded-lg px-3 py-1.5 text-slate-100" /><button onClick={() => setEditingDate(false)} className="text-xs text-slate-400">Annuler</button></div>
             ) : (
-              <h2 className="text-xl md:text-3xl font-bold cursor-pointer hover:text-cyan-300 transition" onClick={() => setEditingDate(true)} title="Cliquer pour modifier la date">
-                Du <span className="text-cyan-300">{range.start}</span> au <span className="text-violet-300">{range.end}</span>
-              </h2>
+              <h2 className="text-xl md:text-3xl font-bold cursor-pointer hover:text-cyan-300 transition" onClick={() => setEditingDate(true)} title="Cliquer pour modifier la date">Du <span className="text-cyan-300">{range.start}</span> au <span className="text-violet-300">{range.end}</span></h2>
             )}
           </div>
           <div className="flex flex-wrap gap-2">
             <button onClick={() => currentIdx < sortedWeekIds.length - 1 && setCurrentWeekId(sortedWeekIds[currentIdx + 1])} disabled={currentIdx >= sortedWeekIds.length - 1} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700"><ChevronLeft size={16} /> Préc.</button>
             <button onClick={() => currentIdx > 0 && setCurrentWeekId(sortedWeekIds[currentIdx - 1])} disabled={currentIdx <= 0} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700">Suiv. <ChevronRight size={16} /></button>
-            <button onClick={duplicateWeek} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-indigo-500/20" title="Ctrl+D"><Copy size={16} /> Dupliquer</button>
-            <button onClick={newWeek} className="px-3 py-2 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-cyan-500/20" title="Ctrl+N"><Plus size={16} /> Nouvelle</button>
+            <button onClick={duplicateWeek} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-indigo-500/20"><Copy size={16} /> Dupliquer</button>
+            <button onClick={newWeek} className="px-3 py-2 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-cyan-500/20"><Plus size={16} /> Nouvelle</button>
           </div>
         </div>
       </div>
@@ -543,12 +390,20 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
         <KPI icon={<BarChart3 size={18} />} label="Marge %" value={fmtPct(calc.totalMargePct)} color={calc.totalMargePct >= 0 ? 'emerald' : 'rose'} />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <Card title="ITE — Leads" accent="cyan" icon="📥"><LeadTable rows={calc.iteLeads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, 'ITE')} totalCost={calc.iteCost} totalLeads={calc.iteLeadsCount} cm={calc.cmIte} accent="cyan" /></Card>
-        <Card title="ITE — Ventes" accent="emerald" icon="💰"><SalesTableIte rows={calc.iteSales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, 'ITE')} totalCA={calc.iteCA} iteCost={calc.iteCost} /></Card>
-        <Card title="PV — Leads" accent="orange" icon="☀️"><LeadTable rows={calc.pvLeads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, 'PV')} totalCost={calc.pvCost} totalLeads={calc.pvLeadsCount} cm={calc.cmPv} accent="orange" /></Card>
-        <Card title="PV — Ventes" accent="emerald" icon="💰"><SalesTablePv rows={calc.pvSales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, 'PV')} /></Card>
-      </div>
+      {/* 3 produits : ITE / PV / PAC */}
+      {PRODUCTS.map(prod => {
+        const stats = calc[prod.key.toLowerCase()];
+        return (
+          <div key={prod.key} className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <Card title={`${prod.label} — Leads`} accent={prod.color} icon={prod.icon}>
+              <LeadTable rows={stats.leads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, prod.key)} totalCost={stats.cost} totalLeads={stats.leadsCount} cm={stats.cm} accent={prod.color} />
+            </Card>
+            <Card title={`${prod.label} — Ventes`} accent="emerald" icon="💰">
+              <SalesTable rows={stats.sales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, prod.key)} totalCA={stats.ca} prodCost={stats.cost} marge={stats.marge} margePct={stats.margePct} />
+            </Card>
+          </div>
+        );
+      })}
 
       <Card title="Coûts annexes" accent="fuchsia" icon="⚙️">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -563,8 +418,7 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
           <table className="w-full text-sm">
             <thead><tr className="text-violet-300 border-b border-violet-800/50"><th className="text-left py-2 px-3 font-medium">Tableau</th><th className="text-right py-2 px-3 font-medium">CA</th><th className="text-right py-2 px-3 font-medium">Coût</th><th className="text-right py-2 px-3 font-medium">Marge</th><th className="text-right py-2 px-3 font-medium">%</th></tr></thead>
             <tbody>
-              <MargeRow label="ITE" ca={calc.iteCA} cost={calc.iteCost} marge={calc.iteCA - calc.iteCost} pct={calc.iteCost > 0 ? ((calc.iteCA - calc.iteCost) / calc.iteCost) * 100 : 0} />
-              <MargeRow label="PV" ca={calc.pvCA} cost={calc.pvCost} marge={calc.pvMarge} pct={calc.pvMargePct} />
+              {PRODUCTS.map(prod => { const s = calc[prod.key.toLowerCase()]; return <MargeRow key={prod.key} label={prod.label} ca={s.ca} cost={s.cost} marge={s.marge} pct={s.margePct} />; })}
               <MargeRow label="CESAR" ca={0} cost={calc.cesarCost} marge={calc.cesarMarge} pct={calc.cesarCost > 0 ? -100 : 0} />
               <MargeRow label="SACHA" ca={0} cost={calc.sachaCost} marge={calc.sachaMarge} pct={calc.sachaCost > 0 ? -100 : 0} />
               <tr className="border-t-2 border-violet-700 font-bold bg-violet-900/40">
@@ -582,6 +436,239 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
   );
 }
 
+// ============== PDF MODAL : SEMAINE ==============
+function WeekPdfModal({ currentWeek, calc, range, session, onClose }) {
+  const handlePrint = () => window.print();
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950 overflow-auto">
+      <style>{`@media print { .no-print { display: none !important; } body { background: white !important; } .pdf-page { color: black !important; } .pdf-page * { color-adjust: exact; -webkit-print-color-adjust: exact; print-color-adjust: exact; } } @page { size: A4; margin: 15mm; }`}</style>
+      <div className="no-print sticky top-0 bg-slate-900 border-b border-slate-700 px-4 py-3 flex items-center justify-between z-10">
+        <h2 className="font-bold flex items-center gap-2"><FileText size={18} /> Aperçu PDF — Semaine du {range.start}</h2>
+        <div className="flex gap-2">
+          <button onClick={handlePrint} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg flex items-center gap-2 text-sm font-medium"><Printer size={16} /> Imprimer / Enregistrer PDF</button>
+          <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Fermer</button>
+        </div>
+      </div>
+      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-8 shadow-2xl" style={{ minHeight: '297mm' }}>
+        <div className="border-b-2 border-slate-800 pb-4 mb-6">
+          <div className="flex justify-between items-start">
+            <div>
+              <h1 className="text-3xl font-bold text-slate-900">Stats Leads</h1>
+              <p className="text-lg text-slate-600 mt-1">Rapport hebdomadaire</p>
+            </div>
+            <div className="text-right text-sm">
+              <div className="font-bold text-slate-900">{session.display_name}</div>
+              <div className="text-slate-600">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
+            </div>
+          </div>
+          <div className="mt-4 inline-block bg-slate-100 px-4 py-2 rounded-lg">
+            <div className="text-xs uppercase tracking-wider text-slate-500">Période</div>
+            <div className="font-bold text-lg">Du {range.start} au {range.end}</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-4 gap-3 mb-6">
+          <PdfKPI label="CA Total" value={fmtEur(calc.totalCA)} color="#0891b2" />
+          <PdfKPI label="Coût Total" value={fmtEur(calc.totalCost)} color="#d97706" />
+          <PdfKPI label="Marge" value={fmtEur(calc.totalMarge)} color={calc.totalMarge >= 0 ? '#059669' : '#dc2626'} />
+          <PdfKPI label="Marge %" value={fmtPct(calc.totalMargePct)} color={calc.totalMargePct >= 0 ? '#059669' : '#dc2626'} />
+        </div>
+
+        {PRODUCTS.map(prod => {
+          const s = calc[prod.key.toLowerCase()];
+          return (
+            <div key={prod.key} className="mb-6">
+              <h2 className="text-xl font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3">{prod.icon} {prod.label}</h2>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <h3 className="font-semibold text-sm text-slate-700 mb-2">Leads</h3>
+                  <table className="w-full text-xs border border-slate-300">
+                    <thead className="bg-slate-100"><tr><th className="text-left p-1.5 border-b border-slate-300">Source</th><th className="text-right p-1.5 border-b border-slate-300">Coût</th><th className="text-right p-1.5 border-b border-slate-300">Leads</th><th className="text-right p-1.5 border-b border-slate-300">€/L</th></tr></thead>
+                    <tbody>
+                      {[...s.leads].sort((a, b) => a.position - b.position).map(r => (
+                        <tr key={r.id} className="border-b border-slate-200">
+                          <td className="p-1.5">{r.source_name}</td>
+                          <td className="text-right p-1.5">{fmtEur(r.cost)}</td>
+                          <td className="text-right p-1.5">{r.leads}</td>
+                          <td className="text-right p-1.5">{r.leads > 0 ? fmtEur(r.cost / r.leads) : '—'}</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-slate-100 font-bold"><td className="p-1.5">TOTAL</td><td className="text-right p-1.5">{fmtEur(s.cost)}</td><td className="text-right p-1.5">{s.leadsCount}</td><td className="text-right p-1.5">{fmtEur(s.cm)}</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+                <div>
+                  <h3 className="font-semibold text-sm text-slate-700 mb-2">Ventes</h3>
+                  <table className="w-full text-xs border border-slate-300">
+                    <thead className="bg-slate-100"><tr><th className="text-left p-1.5 border-b border-slate-300">Client</th><th className="text-right p-1.5 border-b border-slate-300">CA</th><th className="text-right p-1.5 border-b border-slate-300">Leads</th></tr></thead>
+                    <tbody>
+                      {[...s.sales].sort((a, b) => a.position - b.position).map(r => (
+                        <tr key={r.id} className="border-b border-slate-200"><td className="p-1.5">{r.client_name}</td><td className="text-right p-1.5">{fmtEur(r.ca)}</td><td className="text-right p-1.5">{r.leads}</td></tr>
+                      ))}
+                      <tr className="bg-slate-100 font-bold"><td className="p-1.5">TOTAL CA</td><td className="text-right p-1.5">{fmtEur(s.ca)}</td><td className="text-right p-1.5">{s.salesLeads}</td></tr>
+                      <tr className={s.marge >= 0 ? 'bg-emerald-50' : 'bg-rose-50'}>
+                        <td className="p-1.5 font-bold">Marge ({fmtPct(s.margePct)})</td>
+                        <td colSpan={2} className={`text-right p-1.5 font-bold ${s.marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(s.marge)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        <h2 className="text-xl font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3 mt-6">⚙️ Coûts annexes</h2>
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="border border-slate-300 p-3 rounded"><div className="text-xs text-slate-600">Cesar</div><div className="text-lg font-bold text-rose-700">{fmtEur(calc.cesarCost)}</div></div>
+          <div className="border border-slate-300 p-3 rounded"><div className="text-xs text-slate-600">Sacha</div><div className="text-lg font-bold text-rose-700">{fmtEur(calc.sachaCost)}</div></div>
+        </div>
+
+        <h2 className="text-xl font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3">🏆 Synthèse marge globale</h2>
+        <table className="w-full text-sm border border-slate-300">
+          <thead className="bg-slate-800 text-white"><tr><th className="text-left p-2">Tableau</th><th className="text-right p-2">CA</th><th className="text-right p-2">Coût</th><th className="text-right p-2">Marge</th><th className="text-right p-2">%</th></tr></thead>
+          <tbody>
+            {PRODUCTS.map(prod => { const s = calc[prod.key.toLowerCase()]; return <PdfMargeRow key={prod.key} label={prod.label} ca={s.ca} cost={s.cost} marge={s.marge} pct={s.margePct} />; })}
+            <PdfMargeRow label="CESAR" ca={0} cost={calc.cesarCost} marge={calc.cesarMarge} pct={calc.cesarCost > 0 ? -100 : 0} />
+            <PdfMargeRow label="SACHA" ca={0} cost={calc.sachaCost} marge={calc.sachaMarge} pct={calc.sachaCost > 0 ? -100 : 0} />
+            <tr className="bg-slate-200 font-bold border-t-2 border-slate-800">
+              <td className="p-2">TOTAL</td>
+              <td className="text-right p-2">{fmtEur(calc.totalCA)}</td>
+              <td className="text-right p-2">{fmtEur(calc.totalCost)}</td>
+              <td className={`text-right p-2 ${calc.totalMarge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(calc.totalMarge)}</td>
+              <td className={`text-right p-2 ${calc.totalMargePct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtPct(calc.totalMargePct)}</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div className="mt-8 pt-4 border-t border-slate-300 text-center text-xs text-slate-500">
+          Document généré automatiquement • Stats Leads • {new Date().toLocaleString('fr-FR')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PdfKPI({ label, value, color }) {
+  return <div className="border-2 rounded-lg p-3" style={{ borderColor: color }}>
+    <div className="text-xs uppercase tracking-wider" style={{ color }}>{label}</div>
+    <div className="text-lg font-bold mt-1" style={{ color }}>{value}</div>
+  </div>;
+}
+function PdfMargeRow({ label, ca, cost, marge, pct }) {
+  return <tr className="border-b border-slate-200">
+    <td className="p-2 font-medium">{label}</td>
+    <td className="text-right p-2">{fmtEur(ca)}</td>
+    <td className="text-right p-2">{fmtEur(cost)}</td>
+    <td className={`text-right p-2 font-medium ${marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(marge)}</td>
+    <td className={`text-right p-2 font-medium ${pct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtPct(pct)}</td>
+  </tr>;
+}
+
+// ============== PDF MODAL : À FACTURER ==============
+function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
+  const handlePrint = () => window.print();
+  // Tous les clients qui ont du CA > 0
+  const allClients = PRODUCTS.flatMap(prod => {
+    const stats = calc[prod.key.toLowerCase()];
+    return stats.sales.filter(s => Number(s.ca) > 0).map(s => ({ ...s, productLabel: prod.label }));
+  });
+  const totalAFacturer = allClients.reduce((sum, c) => sum + Number(c.ca || 0), 0);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-950 overflow-auto">
+      <style>{`@media print { .no-print { display: none !important; } body { background: white !important; } .pdf-page { color: black !important; } .pdf-page * { color-adjust: exact; -webkit-print-color-adjust: exact; print-color-adjust: exact; } } @page { size: A4; margin: 15mm; }`}</style>
+      <div className="no-print sticky top-0 bg-slate-900 border-b border-slate-700 px-4 py-3 flex items-center justify-between z-10">
+        <h2 className="font-bold flex items-center gap-2"><Receipt size={18} /> Aperçu — État à facturer</h2>
+        <div className="flex gap-2">
+          <button onClick={handlePrint} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg flex items-center gap-2 text-sm font-medium"><Printer size={16} /> Imprimer / PDF</button>
+          <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Fermer</button>
+        </div>
+      </div>
+      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-8 shadow-2xl" style={{ minHeight: '297mm' }}>
+        <div className="border-b-2 border-amber-600 pb-4 mb-6">
+          <div className="flex justify-between items-start">
+            <div>
+              <div className="inline-block bg-amber-100 text-amber-800 px-3 py-1 rounded text-xs uppercase tracking-wider font-bold mb-2">État à facturer</div>
+              <h1 className="text-3xl font-bold text-slate-900">Récapitulatif de facturation</h1>
+              <p className="text-lg text-slate-600 mt-1">Semaine du {range.start} au {range.end}</p>
+            </div>
+            <div className="text-right text-sm">
+              <div className="font-bold text-slate-900">{session.display_name}</div>
+              <div className="text-slate-600">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-5 mb-6">
+          <div className="flex justify-between items-center">
+            <div>
+              <div className="text-xs uppercase tracking-wider text-amber-800 font-bold">Total à réclamer</div>
+              <div className="text-4xl font-bold text-amber-900 mt-1">{fmtEur(totalAFacturer)}</div>
+              <div className="text-xs text-amber-700 mt-1">{allClients.length} client{allClients.length > 1 ? 's' : ''} • {calc.totalSalesLeads} leads vendus</div>
+            </div>
+            <Receipt size={64} className="text-amber-300" />
+          </div>
+        </div>
+
+        {allClients.length === 0 ? (
+          <div className="text-center py-12 text-slate-500 italic">Aucun client à facturer pour cette semaine.</div>
+        ) : (
+          <>
+            {PRODUCTS.map(prod => {
+              const stats = calc[prod.key.toLowerCase()];
+              const clients = stats.sales.filter(s => Number(s.ca) > 0);
+              if (clients.length === 0) return null;
+              const productTotal = clients.reduce((sum, c) => sum + Number(c.ca || 0), 0);
+              return (
+                <div key={prod.key} className="mb-6">
+                  <h2 className="text-lg font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3 flex items-center justify-between">
+                    <span>{prod.icon} {prod.label}</span>
+                    <span className="text-base font-normal text-slate-600">{fmtEur(productTotal)}</span>
+                  </h2>
+                  <table className="w-full text-sm border border-slate-300">
+                    <thead className="bg-slate-100">
+                      <tr>
+                        <th className="text-left p-2 border-b border-slate-300">Client</th>
+                        <th className="text-right p-2 border-b border-slate-300">Leads vendus</th>
+                        <th className="text-right p-2 border-b border-slate-300">Montant à facturer</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...clients].sort((a, b) => a.position - b.position).map(c => (
+                        <tr key={c.id} className="border-b border-slate-200">
+                          <td className="p-2 font-medium">{c.client_name}</td>
+                          <td className="text-right p-2">{c.leads}</td>
+                          <td className="text-right p-2 font-bold text-amber-700">{fmtEur(c.ca)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })}
+
+            <div className="mt-6 pt-4 border-t-2 border-amber-600">
+              <table className="w-full">
+                <tbody>
+                  <tr><td className="text-right p-2 text-slate-600">Sous-total HT</td><td className="text-right p-2 w-40 font-bold">{fmtEur(totalAFacturer)}</td></tr>
+                  <tr className="text-xs text-slate-500"><td className="text-right p-2 italic">(TVA non incluse — à compléter selon ton statut)</td><td></td></tr>
+                  <tr className="bg-amber-100 font-bold text-lg"><td className="text-right p-3">TOTAL À FACTURER</td><td className="text-right p-3 text-amber-900">{fmtEur(totalAFacturer)}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        <div className="mt-8 pt-4 border-t border-slate-300 text-center text-xs text-slate-500">
+          Document généré automatiquement • Stats Leads • {new Date().toLocaleString('fr-FR')}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============== HISTORY VIEW ==============
 function HistoryView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab, deleteWeek }) {
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState('all');
@@ -605,7 +692,7 @@ function HistoryView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab, del
         <div className="relative flex-1"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input type="text" placeholder="Rechercher..." value={search} onChange={(e) => setSearch(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-10 pr-4 py-2.5 text-sm focus:border-cyan-500 focus:outline-none" /></div>
         <select value={yearFilter} onChange={(e) => setYearFilter(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-4 py-2.5 text-sm focus:border-cyan-500 focus:outline-none"><option value="all">Toutes années</option>{allYears.map(y => <option key={y} value={y}>{y}</option>)}</select>
       </div>
-      {filteredMonths.length === 0 && <div className="text-center py-12 text-slate-500">Aucune semaine trouvée</div>}
+      {filteredMonths.length === 0 && <div className="text-center py-12 text-slate-500">Aucune semaine</div>}
       {filteredMonths.map(mk => {
         const monthWeeks = grouped[mk];
         const monthStats = monthWeeks.reduce((acc, w) => ({ ca: acc.ca + w.stats.totalCA, cost: acc.cost + w.stats.totalCost, marge: acc.marge + w.stats.totalMarge, leads: acc.leads + w.stats.totalLeads }), { ca: 0, cost: 0, marge: 0, leads: 0 });
@@ -645,13 +732,24 @@ function HistoryView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab, del
   );
 }
 
+// ============== MONTHLY VIEW ==============
 function MonthlyView({ weeks }) {
   const monthlyData = useMemo(() => {
     const m = {};
     weeks.forEach(w => { const mk = getMonthKey(w.start_date); if (!m[mk]) m[mk] = { weeks: [], stats: null }; m[mk].weeks.push(w); });
     Object.keys(m).forEach(mk => {
-      const stats = m[mk].weeks.map(w => computeWeekStats(w));
-      m[mk].stats = stats.reduce((acc, s) => ({ iteCost: acc.iteCost + s.iteCost, iteLeadsCount: acc.iteLeadsCount + s.iteLeadsCount, iteCA: acc.iteCA + s.iteCA, iteMarge: acc.iteMarge + s.iteMarge, pvCost: acc.pvCost + s.pvCost, pvLeadsCount: acc.pvLeadsCount + s.pvLeadsCount, pvCA: acc.pvCA + s.pvCA, pvMarge: acc.pvMarge + s.pvMarge, cesarCost: acc.cesarCost + s.cesarCost, sachaCost: acc.sachaCost + s.sachaCost, totalCA: acc.totalCA + s.totalCA, totalCost: acc.totalCost + s.totalCost, totalMarge: acc.totalMarge + s.totalMarge, totalLeads: acc.totalLeads + s.totalLeads }), { iteCost: 0, iteLeadsCount: 0, iteCA: 0, iteMarge: 0, pvCost: 0, pvLeadsCount: 0, pvCA: 0, pvMarge: 0, cesarCost: 0, sachaCost: 0, totalCA: 0, totalCost: 0, totalMarge: 0, totalLeads: 0 });
+      const allStats = m[mk].weeks.map(w => computeWeekStats(w));
+      const empty = { cost: 0, leadsCount: 0, ca: 0, salesLeads: 0, marge: 0 };
+      const sumProd = (key) => allStats.reduce((acc, s) => ({ cost: acc.cost + s[key].cost, leadsCount: acc.leadsCount + s[key].leadsCount, ca: acc.ca + s[key].ca, salesLeads: acc.salesLeads + s[key].salesLeads, marge: acc.marge + s[key].marge }), empty);
+      m[mk].stats = {
+        ite: sumProd('ite'), pv: sumProd('pv'), pac: sumProd('pac'),
+        cesarCost: allStats.reduce((s, x) => s + x.cesarCost, 0),
+        sachaCost: allStats.reduce((s, x) => s + x.sachaCost, 0),
+        totalCA: allStats.reduce((s, x) => s + x.totalCA, 0),
+        totalCost: allStats.reduce((s, x) => s + x.totalCost, 0),
+        totalMarge: allStats.reduce((s, x) => s + x.totalMarge, 0),
+        totalLeads: allStats.reduce((s, x) => s + x.totalLeads, 0),
+      };
     });
     return m;
   }, [weeks]);
@@ -659,48 +757,40 @@ function MonthlyView({ weeks }) {
   const [selectedMonth, setSelectedMonth] = useState(sortedMonthKeys[0]);
   useEffect(() => { if (!sortedMonthKeys.includes(selectedMonth) && sortedMonthKeys.length > 0) setSelectedMonth(sortedMonthKeys[0]); }, [sortedMonthKeys, selectedMonth]);
   if (sortedMonthKeys.length === 0) return <div className="text-center py-12 text-slate-500">Aucune donnée</div>;
-  const current = monthlyData[selectedMonth];
-  const stats = current.stats;
-  const cmIte = stats.iteLeadsCount > 0 ? stats.iteCost / stats.iteLeadsCount : 0;
-  const cmPv = stats.pvLeadsCount > 0 ? stats.pvCost / stats.pvLeadsCount : 0;
+  const stats = monthlyData[selectedMonth].stats;
   const margePct = stats.totalCost > 0 ? (stats.totalMarge / stats.totalCost) * 100 : 0;
   const currentIdx = sortedMonthKeys.indexOf(selectedMonth);
-  const prevKey = sortedMonthKeys[currentIdx + 1];
-  const prev = prevKey ? monthlyData[prevKey].stats : null;
+  const prev = sortedMonthKeys[currentIdx + 1] ? monthlyData[sortedMonthKeys[currentIdx + 1]].stats : null;
   const variation = (curr, p) => p > 0 ? ((curr - p) / p) * 100 : null;
   const chartData = [...sortedMonthKeys].reverse().map(mk => ({ label: getMonthLabel(mk).split(' ')[0].slice(0, 3), ca: monthlyData[mk].stats.totalCA, cost: monthlyData[mk].stats.totalCost, marge: monthlyData[mk].stats.totalMarge, isSelected: mk === selectedMonth }));
+
   return (
     <div className="space-y-5">
       <div className="bg-gradient-to-r from-slate-900 to-slate-800/50 rounded-2xl border border-slate-700/50 p-5">
         <h2 className="text-2xl font-bold flex items-center gap-2"><CalendarDays className="text-violet-400" /> Récap mensuel</h2>
         <p className="text-sm text-slate-400 mt-1">{sortedMonthKeys.length} mois enregistré{sortedMonthKeys.length > 1 ? 's' : ''}</p>
       </div>
-      <div className="flex flex-wrap gap-2">
-        {sortedMonthKeys.map(mk => <button key={mk} onClick={() => setSelectedMonth(mk)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${mk === selectedMonth ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-lg shadow-violet-500/20' : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800 hover:border-slate-700'}`}>{getMonthLabel(mk)}</button>)}
-      </div>
+      <div className="flex flex-wrap gap-2">{sortedMonthKeys.map(mk => <button key={mk} onClick={() => setSelectedMonth(mk)} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${mk === selectedMonth ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white shadow-lg shadow-violet-500/20' : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800 hover:border-slate-700'}`}>{getMonthLabel(mk)}</button>)}</div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <KPIBig icon={<Euro size={18} />} label="CA Total" value={fmtEur(stats.totalCA)} variation={prev ? variation(stats.totalCA, prev.totalCA) : null} color="cyan" />
         <KPIBig icon={<Target size={18} />} label="Coût Total" value={fmtEur(stats.totalCost)} variation={prev ? variation(stats.totalCost, prev.totalCost) : null} color="amber" inverseColor />
         <KPIBig icon={stats.totalMarge >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />} label="Marge" value={fmtEur(stats.totalMarge)} variation={prev ? variation(stats.totalMarge, prev.totalMarge) : null} color={stats.totalMarge >= 0 ? 'emerald' : 'rose'} />
         <KPIBig icon={<BarChart3 size={18} />} label="Leads" value={stats.totalLeads.toLocaleString('fr-FR')} variation={prev ? variation(stats.totalLeads, prev.totalLeads) : null} color="violet" />
       </div>
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        <Card title="ITE — Synthèse" accent="cyan" icon="📥">
-          <DetailRow label="Coût total" value={fmtEur(stats.iteCost)} />
-          <DetailRow label="Leads" value={stats.iteLeadsCount.toLocaleString('fr-FR')} />
-          <DetailRow label="Coût moyen / lead" value={fmtEur(cmIte)} />
-          <DetailRow label="CA généré" value={fmtEur(stats.iteCA)} />
-          <DetailRow label="Marge" value={fmtEur(stats.iteCA - stats.iteCost)} highlight={stats.iteCA - stats.iteCost} />
-        </Card>
-        <Card title="PV — Synthèse" accent="orange" icon="☀️">
-          <DetailRow label="Coût total" value={fmtEur(stats.pvCost)} />
-          <DetailRow label="Leads" value={stats.pvLeadsCount.toLocaleString('fr-FR')} />
-          <DetailRow label="Coût moyen / lead" value={fmtEur(cmPv)} />
-          <DetailRow label="CA généré" value={fmtEur(stats.pvCA)} />
-          <DetailRow label="Marge" value={fmtEur(stats.pvCA - stats.pvCost)} highlight={stats.pvCA - stats.pvCost} />
-        </Card>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+        {PRODUCTS.map(prod => {
+          const s = stats[prod.key.toLowerCase()];
+          const cm = s.leadsCount > 0 ? s.cost / s.leadsCount : 0;
+          return <Card key={prod.key} title={`${prod.label} — Synthèse`} accent={prod.color} icon={prod.icon}>
+            <DetailRow label="Coût total" value={fmtEur(s.cost)} />
+            <DetailRow label="Leads" value={s.leadsCount.toLocaleString('fr-FR')} />
+            <DetailRow label="Coût moyen / lead" value={fmtEur(cm)} />
+            <DetailRow label="CA généré" value={fmtEur(s.ca)} />
+            <DetailRow label="Marge" value={fmtEur(s.marge)} highlight={s.marge} />
+          </Card>;
+        })}
       </div>
-      <Card title="Coûts annexes du mois" accent="fuchsia" icon="⚙️">
+      <Card title="Coûts annexes" accent="fuchsia" icon="⚙️">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/40 flex justify-between items-center"><span className="text-sm text-slate-400">Cesar</span><span className="text-lg font-bold text-rose-300">{fmtEur(stats.cesarCost)}</span></div>
           <div className="bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/40 flex justify-between items-center"><span className="text-sm text-slate-400">Sacha</span><span className="text-lg font-bold text-rose-300">{fmtEur(stats.sachaCost)}</span></div>
@@ -712,8 +802,7 @@ function MonthlyView({ weeks }) {
           <table className="w-full text-sm">
             <thead><tr className="text-violet-300 border-b border-violet-800/50"><th className="text-left py-2 px-3 font-medium">Tableau</th><th className="text-right py-2 px-3 font-medium">CA</th><th className="text-right py-2 px-3 font-medium">Coût</th><th className="text-right py-2 px-3 font-medium">Marge</th><th className="text-right py-2 px-3 font-medium">%</th></tr></thead>
             <tbody>
-              <MargeRow label="ITE" ca={stats.iteCA} cost={stats.iteCost} marge={stats.iteCA - stats.iteCost} pct={stats.iteCost > 0 ? ((stats.iteCA - stats.iteCost) / stats.iteCost) * 100 : 0} />
-              <MargeRow label="PV" ca={stats.pvCA} cost={stats.pvCost} marge={stats.pvCA - stats.pvCost} pct={stats.pvCost > 0 ? ((stats.pvCA - stats.pvCost) / stats.pvCost) * 100 : 0} />
+              {PRODUCTS.map(prod => { const s = stats[prod.key.toLowerCase()]; return <MargeRow key={prod.key} label={prod.label} ca={s.ca} cost={s.cost} marge={s.marge} pct={s.cost > 0 ? (s.marge / s.cost) * 100 : 0} />; })}
               <MargeRow label="CESAR" ca={0} cost={stats.cesarCost} marge={-stats.cesarCost} pct={stats.cesarCost > 0 ? -100 : 0} />
               <MargeRow label="SACHA" ca={0} cost={stats.sachaCost} marge={-stats.sachaCost} pct={stats.sachaCost > 0 ? -100 : 0} />
               <tr className="border-t-2 border-violet-700 font-bold bg-violet-900/40"><td className="py-3 px-3 text-violet-100">TOTAL</td><td className="py-3 px-3 text-right text-violet-100">{fmtEur(stats.totalCA)}</td><td className="py-3 px-3 text-right text-violet-100">{fmtEur(stats.totalCost)}</td><td className={`py-3 px-3 text-right ${margeColor(stats.totalMarge)}`}>{fmtEur(stats.totalMarge)}</td><td className={`py-3 px-3 text-right ${margeColor(margePct)}`}>{fmtPct(margePct)}</td></tr>
@@ -726,29 +815,26 @@ function MonthlyView({ weeks }) {
   );
 }
 
+// ============== UI COMPONENTS ==============
 function KPI({ icon, label, value, color }) {
-  const colors = { cyan: 'from-cyan-900/40 to-cyan-800/10 border-cyan-700/40 text-cyan-300', amber: 'from-amber-900/40 to-amber-800/10 border-amber-700/40 text-amber-300', emerald: 'from-emerald-900/40 to-emerald-800/10 border-emerald-700/40 text-emerald-300', rose: 'from-rose-900/40 to-rose-800/10 border-rose-700/40 text-rose-300', violet: 'from-violet-900/40 to-violet-800/10 border-violet-700/40 text-violet-300' };
+  const colors = { cyan: 'from-cyan-900/40 to-cyan-800/10 border-cyan-700/40 text-cyan-300', amber: 'from-amber-900/40 to-amber-800/10 border-amber-700/40 text-amber-300', emerald: 'from-emerald-900/40 to-emerald-800/10 border-emerald-700/40 text-emerald-300', rose: 'from-rose-900/40 to-rose-800/10 border-rose-700/40 text-rose-300', violet: 'from-violet-900/40 to-violet-800/10 border-violet-700/40 text-violet-300', red: 'from-red-900/40 to-red-800/10 border-red-700/40 text-red-300', orange: 'from-orange-900/40 to-orange-800/10 border-orange-700/40 text-orange-300' };
   return <div className={`bg-gradient-to-br ${colors[color]} rounded-xl border p-4 shadow-lg`}><div className="flex items-center gap-2 text-xs uppercase tracking-wider opacity-80 mb-1">{icon}<span>{label}</span></div><div className="text-xl md:text-2xl font-bold text-slate-100">{value}</div></div>;
 }
-
 function KPIBig({ icon, label, value, variation, color, inverseColor }) {
   const colors = { cyan: 'from-cyan-900/40 to-cyan-800/10 border-cyan-700/40 text-cyan-300', amber: 'from-amber-900/40 to-amber-800/10 border-amber-700/40 text-amber-300', emerald: 'from-emerald-900/40 to-emerald-800/10 border-emerald-700/40 text-emerald-300', rose: 'from-rose-900/40 to-rose-800/10 border-rose-700/40 text-rose-300', violet: 'from-violet-900/40 to-violet-800/10 border-violet-700/40 text-violet-300' };
   const varColor = variation === null ? 'text-slate-500' : (inverseColor ? (variation < 0 ? 'text-emerald-400' : 'text-rose-400') : (variation > 0 ? 'text-emerald-400' : variation < 0 ? 'text-rose-400' : 'text-slate-500'));
-  return <div className={`bg-gradient-to-br ${colors[color]} rounded-xl border p-4 shadow-lg`}><div className="flex items-center gap-2 text-xs uppercase tracking-wider opacity-80 mb-1">{icon}<span>{label}</span></div><div className="text-xl md:text-2xl font-bold text-slate-100">{value}</div>{variation !== null && <div className={`text-xs mt-1 font-medium ${varColor}`}>{variation > 0 ? '↑' : variation < 0 ? '↓' : '='} {Math.abs(variation).toFixed(1)}% vs mois préc.</div>}</div>;
+  return <div className={`bg-gradient-to-br ${colors[color]} rounded-xl border p-4 shadow-lg`}><div className="flex items-center gap-2 text-xs uppercase tracking-wider opacity-80 mb-1">{icon}<span>{label}</span></div><div className="text-xl md:text-2xl font-bold text-slate-100">{value}</div>{variation !== null && <div className={`text-xs mt-1 font-medium ${varColor}`}>{variation > 0 ? '↑' : variation < 0 ? '↓' : '='} {Math.abs(variation).toFixed(1)}%</div>}</div>;
 }
-
 function Card({ title, accent, icon, children }) {
-  const accents = { cyan: 'border-cyan-700/40', orange: 'border-orange-700/40', emerald: 'border-emerald-700/40', fuchsia: 'border-fuchsia-700/40', indigo: 'border-indigo-700/40' };
-  const titleColors = { cyan: 'text-cyan-300', orange: 'text-orange-300', emerald: 'text-emerald-300', fuchsia: 'text-fuchsia-300', indigo: 'text-indigo-300' };
+  const accents = { cyan: 'border-cyan-700/40', orange: 'border-orange-700/40', emerald: 'border-emerald-700/40', fuchsia: 'border-fuchsia-700/40', indigo: 'border-indigo-700/40', red: 'border-red-700/40' };
+  const titleColors = { cyan: 'text-cyan-300', orange: 'text-orange-300', emerald: 'text-emerald-300', fuchsia: 'text-fuchsia-300', indigo: 'text-indigo-300', red: 'text-red-300' };
   return <div className={`bg-slate-900/50 rounded-2xl border ${accents[accent]} p-4 md:p-5 shadow-xl`}><div className="flex items-center gap-2 mb-4"><span className="text-xl">{icon}</span><h2 className={`text-lg font-bold ${titleColors[accent]}`}>{title}</h2></div>{children}</div>;
 }
-
 function CostInput({ label, value, onChange }) {
   const [local, setLocal] = useState(value);
   useEffect(() => setLocal(value), [value]);
   return <div className="flex items-center justify-between bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/40"><label className="text-sm text-slate-300 font-medium">{label}</label><input type="number" step="0.01" value={local} onChange={(e) => setLocal(e.target.value)} onBlur={() => { const n = Number(local) || 0; if (n !== Number(value)) onChange(n); }} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-right w-40 focus:border-fuchsia-500 focus:outline-none" /></div>;
 }
-
 function DebouncedInput({ value, onCommit, type = 'text', step, className }) {
   const [local, setLocal] = useState(value);
   useEffect(() => setLocal(value), [value]);
@@ -756,7 +842,7 @@ function DebouncedInput({ value, onCommit, type = 'text', step, className }) {
 }
 
 function LeadTable({ rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm, accent }) {
-  const accentBg = accent === 'cyan' ? 'bg-cyan-900/30' : 'bg-orange-900/30';
+  const accentBg = { cyan: 'bg-cyan-900/30', orange: 'bg-orange-900/30', red: 'bg-red-900/30' }[accent] || 'bg-slate-800';
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
   return (
     <div className="overflow-x-auto">
@@ -782,10 +868,9 @@ function LeadTable({ rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm,
   );
 }
 
-function SalesTableIte({ rows, onUpdate, onDelete, onAdd, totalCA, iteCost }) {
+function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge, margePct }) {
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
-  const marge = totalCA - iteCost;
-  const margePct = iteCost > 0 ? (marge / iteCost) * 100 : 0;
+  const totalLeads = rows.reduce((s, r) => s + (Number(r.leads) || 0), 0);
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
@@ -800,11 +885,11 @@ function SalesTableIte({ rows, onUpdate, onDelete, onAdd, totalCA, iteCost }) {
           <tr className="bg-emerald-900/30 font-semibold">
             <td className="py-2 px-2">TOTAL CA</td>
             <td className="py-2 px-2 text-right">{fmtEur(totalCA)}</td>
-            <td className="py-2 px-2 text-right">{rows.reduce((s, r) => s + (Number(r.leads) || 0), 0)}</td>
+            <td className="py-2 px-2 text-right">{totalLeads}</td>
             <td></td>
           </tr>
           <tr className={`${marge >= 0 ? 'bg-emerald-900/40' : 'bg-rose-900/30'} font-bold border-t-2 border-slate-700`}>
-            <td className="py-2 px-2 text-xs uppercase tracking-wide opacity-80">Marge auto (CA − Coût ITE)</td>
+            <td className="py-2 px-2 text-xs uppercase tracking-wide opacity-80">Marge auto</td>
             <td className={`py-2 px-2 text-right ${margeColor(marge)}`}>{fmtEur(marge)}</td>
             <td className={`py-2 px-2 text-right text-xs ${margeColor(margePct)}`}>{fmtPct(margePct)}</td>
             <td></td>
@@ -816,39 +901,16 @@ function SalesTableIte({ rows, onUpdate, onDelete, onAdd, totalCA, iteCost }) {
   );
 }
 
-function SalesTablePv({ rows, onUpdate, onDelete, onAdd }) {
-  const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead><tr className="text-slate-400 border-b border-slate-700"><th className="text-left py-2 px-2 font-medium">Client</th><th className="text-right py-2 px-2 font-medium w-24">CA</th><th className="text-right py-2 px-2 font-medium w-16">Leads</th><th className="w-8"></th></tr></thead>
-        <tbody>
-          {sorted.map(r => <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 group">
-            <td className="py-1.5 px-2"><DebouncedInput value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
-            <td className="py-1.5 px-2"><DebouncedInput type="number" step="0.01" value={r.ca} onCommit={(v) => onUpdate(r.id, { ca: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
-            <td className="py-1.5 px-2"><DebouncedInput type="number" value={r.leads} onCommit={(v) => onUpdate(r.id, { leads: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
-            <td className="py-1.5 px-1"><button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={14} /></button></td>
-          </tr>)}
-        </tbody>
-      </table>
-      <button onClick={onAdd} className="mt-2 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter un client</button>
-    </div>
-  );
-}
-
 function MargeRow({ label, ca, cost, marge, pct }) {
   return <tr className="border-b border-violet-900/30 hover:bg-violet-900/20"><td className="py-2 px-3 text-violet-200 font-medium">{label}</td><td className="py-2 px-3 text-right">{fmtEur(ca)}</td><td className="py-2 px-3 text-right">{fmtEur(cost)}</td><td className={`py-2 px-3 text-right font-medium ${margeColor(marge)}`}>{fmtEur(marge)}</td><td className={`py-2 px-3 text-right font-medium ${margeColor(pct)}`}>{fmtPct(pct)}</td></tr>;
 }
-
 function Pill({ label, value, color }) {
   const colors = { cyan: 'bg-cyan-500/10 text-cyan-300 border-cyan-700/30', amber: 'bg-amber-500/10 text-amber-300 border-amber-700/30', emerald: 'bg-emerald-500/10 text-emerald-300 border-emerald-700/30', rose: 'bg-rose-500/10 text-rose-300 border-rose-700/30', violet: 'bg-violet-500/10 text-violet-300 border-violet-700/30' };
   return <div className={`px-2 py-0.5 rounded-md border text-xs font-medium ${colors[color]}`}><span className="opacity-70 mr-1">{label}</span><span>{value}</span></div>;
 }
-
 function DetailRow({ label, value, highlight }) {
   return <div className="flex justify-between items-center py-2 border-b border-slate-800 last:border-0"><span className="text-sm text-slate-400">{label}</span><span className={`font-medium ${highlight !== undefined ? margeColor(highlight) : 'text-slate-100'}`}>{value}</span></div>;
 }
-
 function MonthlyBarChart({ data }) {
   const w = 700, h = 280, pad = { l: 50, r: 20, t: 20, b: 50 };
   const max = Math.max(...data.map(d => Math.max(d.ca, d.cost, Math.abs(d.marge))));
@@ -857,8 +919,7 @@ function MonthlyBarChart({ data }) {
   const groupW = (w - pad.l - pad.r) / data.length;
   const barW = Math.min(20, groupW / 4);
   const yScale = (v) => pad.t + ((max - v) / range) * (h - pad.t - pad.b);
-  const ticks = 4;
-  const tickValues = Array.from({ length: ticks + 1 }, (_, i) => min + (range * i) / ticks);
+  const tickValues = Array.from({ length: 5 }, (_, i) => min + (range * i) / 4);
   return (
     <div className="overflow-x-auto">
       <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-auto" style={{ minWidth: 500 }}>
@@ -878,7 +939,6 @@ function MonthlyBarChart({ data }) {
     </div>
   );
 }
-
 function Legend({ color, label }) {
   return <div className="flex items-center gap-1.5"><div className="w-3 h-3 rounded-sm" style={{ background: color }}></div><span className="text-slate-400">{label}</span></div>;
 }
