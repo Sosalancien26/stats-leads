@@ -561,74 +561,80 @@ function WeekPdfModal({ currentWeek, calc, range, session, onClose }) {
   const handlePrint = () => window.print();
   return (
     <div className="fixed inset-0 z-50 bg-slate-950 overflow-auto">
-      <style>{`@media print { .no-print { display: none !important; } body { background: white !important; } .pdf-page { color: black !important; } .pdf-page * { color-adjust: exact; -webkit-print-color-adjust: exact; print-color-adjust: exact; } } @page { size: A4; margin: 15mm; }`}</style>
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          body { background: white !important; margin: 0 !important; }
+          .pdf-page { color: black !important; box-shadow: none !important; margin: 0 !important; padding: 8mm !important; max-width: none !important; min-height: auto !important; page-break-after: avoid; page-break-inside: avoid; }
+          .pdf-page * { color-adjust: exact; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .pdf-section { page-break-inside: avoid; }
+        }
+        @page { size: A4 portrait; margin: 0; }
+      `}</style>
       <div className="no-print sticky top-0 bg-slate-900 border-b border-slate-700 px-4 py-3 flex items-center justify-between z-10">
-        <h2 className="font-bold flex items-center gap-2"><FileText size={18} /> Aperçu PDF — Semaine du {range.start}</h2>
-        <div className="flex gap-2">
-          <button onClick={handlePrint} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg flex items-center gap-2 text-sm font-medium"><Printer size={16} /> Imprimer / Enregistrer PDF</button>
+        <h2 className="font-bold flex items-center gap-2"><FileText size={18} /> Semaine du {range.start}</h2>
+        <div className="flex gap-2 items-center">
+          <span className="hidden md:inline text-xs text-slate-400">💡 Choisir "Enregistrer en PDF" comme imprimante</span>
+          <button onClick={handlePrint} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg flex items-center gap-2 text-sm font-medium"><Printer size={16} /> Télécharger PDF</button>
           <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Fermer</button>
         </div>
       </div>
-      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-8 shadow-2xl" style={{ minHeight: '297mm' }}>
-        <div className="border-b-2 border-slate-800 pb-4 mb-6">
-          <div className="flex justify-between items-start">
-            <div>
-              <h1 className="text-3xl font-bold text-slate-900">Stats Leads</h1>
-              <p className="text-lg text-slate-600 mt-1">Rapport hebdomadaire</p>
-            </div>
-            <div className="text-right text-sm">
-              <div className="font-bold text-slate-900">{session.display_name}</div>
-              <div className="text-slate-600">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
-            </div>
+      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-6 shadow-2xl" style={{ fontSize: '9px', lineHeight: '1.3' }}>
+        <div className="flex justify-between items-end border-b-2 border-slate-800 pb-2 mb-3">
+          <div>
+            <h1 className="text-xl font-bold text-slate-900 leading-tight">Stats Leads</h1>
+            <p className="text-[10px] text-slate-600">Rapport hebdomadaire — {session.display_name}</p>
           </div>
-          <div className="mt-4 inline-block bg-slate-100 px-4 py-2 rounded-lg">
-            <div className="text-xs uppercase tracking-wider text-slate-500">Période</div>
-            <div className="font-bold text-lg">Du {range.start} au {range.end}</div>
+          <div className="text-right">
+            <div className="bg-slate-100 px-2 py-1 rounded text-[10px] inline-block">
+              <span className="font-bold">Du {range.start} au {range.end}</span>
+            </div>
+            <div className="text-[8px] text-slate-500 mt-0.5">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-3 mb-6">
-          <PdfKPI label="CA Total" value={fmtEur(calc.totalCA)} color="#0891b2" />
-          <PdfKPI label="Coût Total" value={fmtEur(calc.totalCost)} color="#d97706" />
+        <div className="grid grid-cols-4 gap-2 mb-3 pdf-section">
+          <PdfKPI label="CA" value={fmtEur(calc.totalCA)} color="#0891b2" />
+          <PdfKPI label="Coût" value={fmtEur(calc.totalCost)} color="#d97706" />
           <PdfKPI label="Marge" value={fmtEur(calc.totalMarge)} color={calc.totalMarge >= 0 ? '#059669' : '#dc2626'} />
           <PdfKPI label="Marge %" value={fmtPct(calc.totalMargePct)} color={calc.totalMargePct >= 0 ? '#059669' : '#dc2626'} />
         </div>
 
         {PRODUCTS.map(prod => {
           const s = calc[prod.key.toLowerCase()];
+          const hasData = s.leads.length > 0 || s.sales.length > 0;
+          if (!hasData) return null;
           return (
-            <div key={prod.key} className="mb-6">
-              <h2 className="text-xl font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3">{prod.icon} {prod.label}</h2>
-              <div className="grid grid-cols-2 gap-4">
+            <div key={prod.key} className="mb-2 pdf-section">
+              <h2 className="text-[11px] font-bold text-slate-900 border-b border-slate-400 pb-0.5 mb-1">{prod.icon} {prod.label}</h2>
+              <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <h3 className="font-semibold text-sm text-slate-700 mb-2">Leads</h3>
-                  <table className="w-full text-xs border border-slate-300">
-                    <thead className="bg-slate-100"><tr><th className="text-left p-1.5 border-b border-slate-300">Source</th><th className="text-right p-1.5 border-b border-slate-300">Coût</th><th className="text-right p-1.5 border-b border-slate-300">Leads</th><th className="text-right p-1.5 border-b border-slate-300">€/L</th></tr></thead>
+                  <table className="w-full border border-slate-300" style={{ fontSize: '8px' }}>
+                    <thead className="bg-slate-100"><tr><th className="text-left px-1 py-0.5 border-b border-slate-300">Source</th><th className="text-right px-1 py-0.5 border-b border-slate-300">€</th><th className="text-right px-1 py-0.5 border-b border-slate-300">Lds</th><th className="text-right px-1 py-0.5 border-b border-slate-300">€/L</th></tr></thead>
                     <tbody>
                       {[...s.leads].sort((a, b) => a.position - b.position).map(r => (
                         <tr key={r.id} className="border-b border-slate-200">
-                          <td className="p-1.5">{r.source_name}</td>
-                          <td className="text-right p-1.5">{fmtEur(r.cost)}</td>
-                          <td className="text-right p-1.5">{r.leads}</td>
-                          <td className="text-right p-1.5">{r.leads > 0 ? fmtEur(r.cost / r.leads) : '—'}</td>
+                          <td className="px-1 py-0.5 truncate max-w-[120px]">{r.source_name}</td>
+                          <td className="text-right px-1 py-0.5">{fmtEurShort(r.cost)}</td>
+                          <td className="text-right px-1 py-0.5">{r.leads}</td>
+                          <td className="text-right px-1 py-0.5">{r.leads > 0 ? fmtEurShort(r.cost / r.leads) : '—'}</td>
                         </tr>
                       ))}
-                      <tr className="bg-slate-100 font-bold"><td className="p-1.5">TOTAL</td><td className="text-right p-1.5">{fmtEur(s.cost)}</td><td className="text-right p-1.5">{s.leadsCount}</td><td className="text-right p-1.5">{fmtEur(s.cm)}</td></tr>
+                      <tr className="bg-slate-100 font-bold"><td className="px-1 py-0.5">TOTAL</td><td className="text-right px-1 py-0.5">{fmtEurShort(s.cost)}</td><td className="text-right px-1 py-0.5">{s.leadsCount}</td><td className="text-right px-1 py-0.5">{fmtEurShort(s.cm)}</td></tr>
                     </tbody>
                   </table>
                 </div>
                 <div>
-                  <h3 className="font-semibold text-sm text-slate-700 mb-2">Ventes</h3>
-                  <table className="w-full text-xs border border-slate-300">
-                    <thead className="bg-slate-100"><tr><th className="text-left p-1.5 border-b border-slate-300">Client</th><th className="text-right p-1.5 border-b border-slate-300">CA</th><th className="text-right p-1.5 border-b border-slate-300">Leads</th></tr></thead>
+                  <table className="w-full border border-slate-300" style={{ fontSize: '8px' }}>
+                    <thead className="bg-slate-100"><tr><th className="text-left px-1 py-0.5 border-b border-slate-300">Client</th><th className="text-right px-1 py-0.5 border-b border-slate-300">CA</th><th className="text-right px-1 py-0.5 border-b border-slate-300">Lds</th></tr></thead>
                     <tbody>
                       {[...s.sales].sort((a, b) => a.position - b.position).map(r => (
-                        <tr key={r.id} className="border-b border-slate-200"><td className="p-1.5">{r.client_name}</td><td className="text-right p-1.5">{fmtEur(r.ca)}</td><td className="text-right p-1.5">{r.leads}</td></tr>
+                        <tr key={r.id} className="border-b border-slate-200"><td className="px-1 py-0.5 truncate max-w-[120px]">{r.client_name}</td><td className="text-right px-1 py-0.5">{fmtEurShort(r.ca)}</td><td className="text-right px-1 py-0.5">{r.leads}</td></tr>
                       ))}
-                      <tr className="bg-slate-100 font-bold"><td className="p-1.5">TOTAL CA</td><td className="text-right p-1.5">{fmtEur(s.ca)}</td><td className="text-right p-1.5">{s.salesLeads}</td></tr>
+                      <tr className="bg-slate-100 font-bold"><td className="px-1 py-0.5">TOTAL CA</td><td className="text-right px-1 py-0.5">{fmtEurShort(s.ca)}</td><td className="text-right px-1 py-0.5">{s.salesLeads}</td></tr>
                       <tr className={s.marge >= 0 ? 'bg-emerald-50' : 'bg-rose-50'}>
-                        <td className="p-1.5 font-bold">Marge ({fmtPct(s.margePct)})</td>
-                        <td colSpan={2} className={`text-right p-1.5 font-bold ${s.marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(s.marge)}</td>
+                        <td className="px-1 py-0.5 font-bold">Marge ({fmtPct(s.margePct)})</td>
+                        <td colSpan={2} className={`text-right px-1 py-0.5 font-bold ${s.marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEurShort(s.marge)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -638,31 +644,28 @@ function WeekPdfModal({ currentWeek, calc, range, session, onClose }) {
           );
         })}
 
-        <h2 className="text-xl font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3 mt-6">⚙️ Coûts annexes</h2>
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div className="border border-slate-300 p-3 rounded"><div className="text-xs text-slate-600">Cesar</div><div className="text-lg font-bold text-rose-700">{fmtEur(calc.cesarCost)}</div></div>
-          <div className="border border-slate-300 p-3 rounded"><div className="text-xs text-slate-600">Sacha</div><div className="text-lg font-bold text-rose-700">{fmtEur(calc.sachaCost)}</div></div>
+        <div className="grid grid-cols-2 gap-2 mb-2 pdf-section">
+          <div className="border border-slate-300 px-2 py-1 rounded flex justify-between items-center text-[9px]"><span className="text-slate-600">Coût Cesar</span><span className="font-bold text-rose-700">{fmtEur(calc.cesarCost)}</span></div>
+          <div className="border border-slate-300 px-2 py-1 rounded flex justify-between items-center text-[9px]"><span className="text-slate-600">Coût Sacha</span><span className="font-bold text-rose-700">{fmtEur(calc.sachaCost)}</span></div>
         </div>
 
-        <h2 className="text-xl font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3">🏆 Synthèse marge globale</h2>
-        <table className="w-full text-sm border border-slate-300">
-          <thead className="bg-slate-800 text-white"><tr><th className="text-left p-2">Tableau</th><th className="text-right p-2">CA</th><th className="text-right p-2">Coût</th><th className="text-right p-2">Marge</th><th className="text-right p-2">%</th></tr></thead>
-          <tbody>
-            {PRODUCTS.map(prod => { const s = calc[prod.key.toLowerCase()]; return <PdfMargeRow key={prod.key} label={prod.label} ca={s.ca} cost={s.cost} marge={s.marge} pct={s.margePct} />; })}
-            <PdfMargeRow label="CESAR" ca={0} cost={calc.cesarCost} marge={calc.cesarMarge} pct={calc.cesarCost > 0 ? -100 : 0} />
-            <PdfMargeRow label="SACHA" ca={0} cost={calc.sachaCost} marge={calc.sachaMarge} pct={calc.sachaCost > 0 ? -100 : 0} />
-            <tr className="bg-slate-200 font-bold border-t-2 border-slate-800">
-              <td className="p-2">TOTAL</td>
-              <td className="text-right p-2">{fmtEur(calc.totalCA)}</td>
-              <td className="text-right p-2">{fmtEur(calc.totalCost)}</td>
-              <td className={`text-right p-2 ${calc.totalMarge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(calc.totalMarge)}</td>
-              <td className={`text-right p-2 ${calc.totalMargePct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtPct(calc.totalMargePct)}</td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div className="mt-8 pt-4 border-t border-slate-300 text-center text-xs text-slate-500">
-          Document généré automatiquement • Stats Leads • {new Date().toLocaleString('fr-FR')}
+        <div className="pdf-section">
+          <h2 className="text-[11px] font-bold text-slate-900 border-b border-slate-400 pb-0.5 mb-1">🏆 Synthèse marge globale</h2>
+          <table className="w-full border border-slate-300" style={{ fontSize: '9px' }}>
+            <thead className="bg-slate-800 text-white"><tr><th className="text-left px-2 py-1">Tableau</th><th className="text-right px-2 py-1">CA</th><th className="text-right px-2 py-1">Coût</th><th className="text-right px-2 py-1">Marge</th><th className="text-right px-2 py-1">%</th></tr></thead>
+            <tbody>
+              {PRODUCTS.map(prod => { const s = calc[prod.key.toLowerCase()]; return <PdfMargeRow key={prod.key} label={prod.label} ca={s.ca} cost={s.cost} marge={s.marge} pct={s.margePct} />; })}
+              <PdfMargeRow label="CESAR" ca={0} cost={calc.cesarCost} marge={calc.cesarMarge} pct={calc.cesarCost > 0 ? -100 : 0} />
+              <PdfMargeRow label="SACHA" ca={0} cost={calc.sachaCost} marge={calc.sachaMarge} pct={calc.sachaCost > 0 ? -100 : 0} />
+              <tr className="bg-slate-200 font-bold border-t-2 border-slate-800">
+                <td className="px-2 py-1">TOTAL</td>
+                <td className="text-right px-2 py-1">{fmtEur(calc.totalCA)}</td>
+                <td className="text-right px-2 py-1">{fmtEur(calc.totalCost)}</td>
+                <td className={`text-right px-2 py-1 ${calc.totalMarge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(calc.totalMarge)}</td>
+                <td className={`text-right px-2 py-1 ${calc.totalMargePct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtPct(calc.totalMargePct)}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -670,25 +673,24 @@ function WeekPdfModal({ currentWeek, calc, range, session, onClose }) {
 }
 
 function PdfKPI({ label, value, color }) {
-  return <div className="border-2 rounded-lg p-3" style={{ borderColor: color }}>
-    <div className="text-xs uppercase tracking-wider" style={{ color }}>{label}</div>
-    <div className="text-lg font-bold mt-1" style={{ color }}>{value}</div>
+  return <div className="border-2 rounded px-2 py-1" style={{ borderColor: color }}>
+    <div className="text-[8px] uppercase tracking-wider" style={{ color }}>{label}</div>
+    <div className="text-[12px] font-bold" style={{ color }}>{value}</div>
   </div>;
 }
 function PdfMargeRow({ label, ca, cost, marge, pct }) {
   return <tr className="border-b border-slate-200">
-    <td className="p-2 font-medium">{label}</td>
-    <td className="text-right p-2">{fmtEur(ca)}</td>
-    <td className="text-right p-2">{fmtEur(cost)}</td>
-    <td className={`text-right p-2 font-medium ${marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(marge)}</td>
-    <td className={`text-right p-2 font-medium ${pct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtPct(pct)}</td>
+    <td className="px-2 py-1 font-medium">{label}</td>
+    <td className="text-right px-2 py-1">{fmtEur(ca)}</td>
+    <td className="text-right px-2 py-1">{fmtEur(cost)}</td>
+    <td className={`text-right px-2 py-1 font-medium ${marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEur(marge)}</td>
+    <td className={`text-right px-2 py-1 font-medium ${pct >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtPct(pct)}</td>
   </tr>;
 }
 
 // ============== PDF MODAL : À FACTURER ==============
 function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
   const handlePrint = () => window.print();
-  // Tous les clients qui ont du CA > 0
   const allClients = PRODUCTS.flatMap(prod => {
     const stats = calc[prod.key.toLowerCase()];
     return stats.sales.filter(s => Number(s.ca) > 0).map(s => ({ ...s, productLabel: prod.label }));
@@ -697,42 +699,50 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950 overflow-auto">
-      <style>{`@media print { .no-print { display: none !important; } body { background: white !important; } .pdf-page { color: black !important; } .pdf-page * { color-adjust: exact; -webkit-print-color-adjust: exact; print-color-adjust: exact; } } @page { size: A4; margin: 15mm; }`}</style>
+      <style>{`
+        @media print {
+          .no-print { display: none !important; }
+          body { background: white !important; margin: 0 !important; }
+          .pdf-page { color: black !important; box-shadow: none !important; margin: 0 !important; padding: 8mm !important; max-width: none !important; min-height: auto !important; page-break-after: avoid; page-break-inside: avoid; }
+          .pdf-page * { color-adjust: exact; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+          .pdf-section { page-break-inside: avoid; }
+        }
+        @page { size: A4 portrait; margin: 0; }
+      `}</style>
       <div className="no-print sticky top-0 bg-slate-900 border-b border-slate-700 px-4 py-3 flex items-center justify-between z-10">
-        <h2 className="font-bold flex items-center gap-2"><Receipt size={18} /> Aperçu — État à facturer</h2>
-        <div className="flex gap-2">
-          <button onClick={handlePrint} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg flex items-center gap-2 text-sm font-medium"><Printer size={16} /> Imprimer / PDF</button>
+        <h2 className="font-bold flex items-center gap-2"><Receipt size={18} /> À facturer — {range.start}</h2>
+        <div className="flex gap-2 items-center">
+          <span className="hidden md:inline text-xs text-slate-400">💡 Choisir "Enregistrer en PDF"</span>
+          <button onClick={handlePrint} className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg flex items-center gap-2 text-sm font-medium"><Printer size={16} /> Télécharger PDF</button>
           <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Fermer</button>
         </div>
       </div>
-      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-8 shadow-2xl" style={{ minHeight: '297mm' }}>
-        <div className="border-b-2 border-amber-600 pb-4 mb-6">
-          <div className="flex justify-between items-start">
-            <div>
-              <div className="inline-block bg-amber-100 text-amber-800 px-3 py-1 rounded text-xs uppercase tracking-wider font-bold mb-2">État à facturer</div>
-              <h1 className="text-3xl font-bold text-slate-900">Récapitulatif de facturation</h1>
-              <p className="text-lg text-slate-600 mt-1">Semaine du {range.start} au {range.end}</p>
-            </div>
-            <div className="text-right text-sm">
-              <div className="font-bold text-slate-900">{session.display_name}</div>
-              <div className="text-slate-600">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
-            </div>
+      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-6 shadow-2xl" style={{ fontSize: '10px', lineHeight: '1.3' }}>
+        <div className="flex justify-between items-end border-b-2 border-amber-600 pb-2 mb-3">
+          <div>
+            <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[8px] uppercase tracking-wider font-bold">État à facturer</span>
+            <h1 className="text-xl font-bold text-slate-900 mt-1 leading-tight">Récapitulatif de facturation</h1>
+            <p className="text-[10px] text-slate-600">Semaine du {range.start} au {range.end}</p>
+          </div>
+          <div className="text-right text-[9px]">
+            <div className="font-bold text-slate-900">{session.display_name}</div>
+            <div className="text-slate-500">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
           </div>
         </div>
 
-        <div className="bg-amber-50 border-2 border-amber-300 rounded-lg p-5 mb-6">
+        <div className="bg-amber-50 border-2 border-amber-300 rounded p-3 mb-3 pdf-section">
           <div className="flex justify-between items-center">
             <div>
-              <div className="text-xs uppercase tracking-wider text-amber-800 font-bold">Total à réclamer</div>
-              <div className="text-4xl font-bold text-amber-900 mt-1">{fmtEur(totalAFacturer)}</div>
-              <div className="text-xs text-amber-700 mt-1">{allClients.length} client{allClients.length > 1 ? 's' : ''} • {calc.totalSalesLeads} leads vendus</div>
+              <div className="text-[9px] uppercase tracking-wider text-amber-800 font-bold">Total à réclamer</div>
+              <div className="text-2xl font-bold text-amber-900">{fmtEur(totalAFacturer)}</div>
+              <div className="text-[9px] text-amber-700">{allClients.length} client{allClients.length > 1 ? 's' : ''} • {calc.totalSalesLeads} leads vendus</div>
             </div>
-            <Receipt size={64} className="text-amber-300" />
+            <Receipt size={36} className="text-amber-300" />
           </div>
         </div>
 
         {allClients.length === 0 ? (
-          <div className="text-center py-12 text-slate-500 italic">Aucun client à facturer pour cette semaine.</div>
+          <div className="text-center py-8 text-slate-500 italic text-[10px]">Aucun client à facturer pour cette semaine.</div>
         ) : (
           <>
             {PRODUCTS.map(prod => {
@@ -741,25 +751,25 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
               if (clients.length === 0) return null;
               const productTotal = clients.reduce((sum, c) => sum + Number(c.ca || 0), 0);
               return (
-                <div key={prod.key} className="mb-6">
-                  <h2 className="text-lg font-bold text-slate-900 border-b border-slate-300 pb-2 mb-3 flex items-center justify-between">
+                <div key={prod.key} className="mb-2 pdf-section">
+                  <h2 className="text-[11px] font-bold text-slate-900 border-b border-slate-300 pb-0.5 mb-1 flex items-center justify-between">
                     <span>{prod.icon} {prod.label}</span>
-                    <span className="text-base font-normal text-slate-600">{fmtEur(productTotal)}</span>
+                    <span className="text-[10px] font-normal text-slate-600">{fmtEur(productTotal)}</span>
                   </h2>
-                  <table className="w-full text-sm border border-slate-300">
+                  <table className="w-full border border-slate-300" style={{ fontSize: '9px' }}>
                     <thead className="bg-slate-100">
                       <tr>
-                        <th className="text-left p-2 border-b border-slate-300">Client</th>
-                        <th className="text-right p-2 border-b border-slate-300">Leads vendus</th>
-                        <th className="text-right p-2 border-b border-slate-300">Montant à facturer</th>
+                        <th className="text-left px-2 py-1 border-b border-slate-300">Client</th>
+                        <th className="text-right px-2 py-1 border-b border-slate-300 w-16">Leads</th>
+                        <th className="text-right px-2 py-1 border-b border-slate-300 w-24">Montant</th>
                       </tr>
                     </thead>
                     <tbody>
                       {[...clients].sort((a, b) => a.position - b.position).map(c => (
                         <tr key={c.id} className="border-b border-slate-200">
-                          <td className="p-2 font-medium">{c.client_name}</td>
-                          <td className="text-right p-2">{c.leads}</td>
-                          <td className="text-right p-2 font-bold text-amber-700">{fmtEur(c.ca)}</td>
+                          <td className="px-2 py-1 font-medium">{c.client_name}</td>
+                          <td className="text-right px-2 py-1">{c.leads}</td>
+                          <td className="text-right px-2 py-1 font-bold text-amber-700">{fmtEur(c.ca)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -768,21 +778,17 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
               );
             })}
 
-            <div className="mt-6 pt-4 border-t-2 border-amber-600">
+            <div className="mt-3 pt-2 border-t-2 border-amber-600 pdf-section">
               <table className="w-full">
                 <tbody>
-                  <tr><td className="text-right p-2 text-slate-600">Sous-total HT</td><td className="text-right p-2 w-40 font-bold">{fmtEur(totalAFacturer)}</td></tr>
-                  <tr className="text-xs text-slate-500"><td className="text-right p-2 italic">(TVA non incluse — à compléter selon ton statut)</td><td></td></tr>
-                  <tr className="bg-amber-100 font-bold text-lg"><td className="text-right p-3">TOTAL À FACTURER</td><td className="text-right p-3 text-amber-900">{fmtEur(totalAFacturer)}</td></tr>
+                  <tr><td className="text-right px-2 py-0.5 text-slate-600 text-[9px]">Sous-total HT</td><td className="text-right px-2 py-0.5 w-32 font-bold text-[10px]">{fmtEur(totalAFacturer)}</td></tr>
+                  <tr className="text-[8px] text-slate-500"><td className="text-right px-2 py-0.5 italic">(TVA non incluse)</td><td></td></tr>
+                  <tr className="bg-amber-100 font-bold"><td className="text-right px-2 py-1.5 text-[11px]">TOTAL À FACTURER</td><td className="text-right px-2 py-1.5 text-amber-900 text-[12px]">{fmtEur(totalAFacturer)}</td></tr>
                 </tbody>
               </table>
             </div>
           </>
         )}
-
-        <div className="mt-8 pt-4 border-t border-slate-300 text-center text-xs text-slate-500">
-          Document généré automatiquement • Stats Leads • {new Date().toLocaleString('fr-FR')}
-        </div>
       </div>
     </div>
   );
