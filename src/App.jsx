@@ -41,8 +41,8 @@ const api = {
   },
   async logout() { if (this._session?.token) { try { await this._rpc('logout_v2', { p_token: this._session.token }, { silentSave: true }); } catch (e) {} } this.setSession(null); },
   async getWeeks() { return this._rpc('get_my_weeks', { p_token: this._session.token }, { silentSave: true }); },
-  async createWeek(date) { return this._rpc('create_week', { p_token: this._session.token, p_start_date: date }); },
-  async duplicateWeek(srcId, newDate) { return this._rpc('duplicate_week', { p_token: this._session.token, p_source_week_id: srcId, p_new_start_date: newDate }); },
+  async createWeek(startDate, endDate) { return this._rpc('create_week', { p_token: this._session.token, p_start_date: startDate, p_end_date: endDate || null }); },
+  async duplicateWeek(srcId, newStart, newEnd) { return this._rpc('duplicate_week', { p_token: this._session.token, p_source_week_id: srcId, p_new_start_date: newStart, p_new_end_date: newEnd || null }); },
   async updateWeek(weekId, patch) { return this._rpc('update_week', { p_token: this._session.token, p_week_id: weekId, p_patch: patch }); },
   async deleteWeek(weekId) { return this._rpc('delete_week', { p_token: this._session.token, p_week_id: weekId }); },
   async addLeadSource(weekId, category, name) { return this._rpc('add_lead_source', { p_token: this._session.token, p_week_id: weekId, p_category: category, p_source_name: name }); },
@@ -62,8 +62,19 @@ const margeColor = (n) => n > 0 ? 'text-emerald-400' : n < 0 ? 'text-rose-400' :
 const MOIS_FR = ['Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin', 'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'];
 const toIsoDate = (d) => typeof d === 'string' ? d : d.toISOString().split('T')[0];
 const formatDate = (d) => { const date = new Date(d); return `${String(date.getDate()).padStart(2, '0')}/${String(date.getMonth() + 1).padStart(2, '0')}/${date.getFullYear()}`; };
-const getWeekRange = (s) => { const start = new Date(s); const end = new Date(start); end.setDate(start.getDate() + 7); return { start: formatDate(start), end: formatDate(end) }; };
+const getWeekRange = (w) => {
+  // Si w est un objet avec start_date/end_date, on prend les vraies dates ; sinon legacy +7
+  if (typeof w === 'object' && w !== null && w.end_date) {
+    return { start: formatDate(w.start_date), end: formatDate(w.end_date) };
+  }
+  const startStr = typeof w === 'object' ? w.start_date : w;
+  const start = new Date(startStr);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 7);
+  return { start: formatDate(start), end: formatDate(end) };
+};
 const getCurrentMonday = () => { const d = new Date(); const day = d.getDay(); const diff = d.getDate() - day + (day === 0 ? -6 : 1); return new Date(d.setDate(diff)).toISOString().split('T')[0]; };
+const addDays = (dateStr, n) => { const d = new Date(dateStr); d.setDate(d.getDate() + n); return toIsoDate(d); };
 const getMonthKey = (s) => { const d = new Date(s); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
 const getMonthLabel = (key) => { const [y, m] = key.split('-'); return `${MOIS_FR[parseInt(m) - 1]} ${y}`; };
 
@@ -240,6 +251,8 @@ function StatsLeads({ session }) {
   const sortedWeekIds = useMemo(() => weeks.map(w => w.id), [weeks]);
   const currentIdx = sortedWeekIds.indexOf(currentWeekId);
 
+  const [newWeekModal, setNewWeekModal] = useState(null); // { mode: 'new'|'duplicate', defaultStart, defaultEnd }
+
   const optimistic = (mutator, serverCall) => {
     setWeeks(mutator);
     serverCall().catch(e => { setError(e.message); toast(e.message, 'error'); loadWeeks(); });
@@ -249,25 +262,41 @@ function StatsLeads({ session }) {
   const deleteRow = (table, rowId, weekId) => optimistic(prev => prev.map(w => w.id === weekId ? { ...w, [table]: w[table].filter(r => r.id !== rowId) } : w), () => table === 'lead_sources' ? api.deleteLeadSource(rowId) : api.deleteSale(rowId));
   const addLeadSource = async (weekId, category) => { try { const row = await api.addLeadSource(weekId, category, 'Nouvelle source'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, lead_sources: [...(w.lead_sources || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
   const addSaleRow = async (weekId, category) => { try { const row = await api.addSale(weekId, category, 'Nouveau client'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, sales: [...(w.sales || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
-  const newWeek = async () => {
+
+  const openNewWeekModal = () => {
     if (!currentWeek) return;
-    const lastDate = new Date(currentWeek.start_date); lastDate.setDate(lastDate.getDate() + 7);
-    const newDate = toIsoDate(lastDate);
-    const existing = weeks.find(w => w.start_date === newDate);
-    if (existing) return setCurrentWeekId(existing.id);
-    try { const w = await api.createWeek(newDate); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); toast('Nouvelle semaine créée', 'success'); }
-    catch (e) { setError(e.message); toast(e.message, 'error'); }
+    const defaultStart = addDays(currentWeek.start_date, 7);
+    const defaultEnd = addDays(defaultStart, 7);
+    setNewWeekModal({ mode: 'new', defaultStart, defaultEnd });
   };
-  const duplicateWeek = async () => {
+  const openDuplicateModal = () => {
     if (!currentWeek) return;
-    const lastDate = new Date(currentWeek.start_date); lastDate.setDate(lastDate.getDate() + 7);
-    const newDate = toIsoDate(lastDate);
-    const existing = weeks.find(w => w.start_date === newDate);
-    if (existing) return setCurrentWeekId(existing.id);
-    try { const w = await api.duplicateWeek(currentWeek.id, newDate); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); toast('Semaine dupliquée', 'success'); }
-    catch (e) { setError(e.message); toast(e.message, 'error'); }
+    const defaultStart = addDays(currentWeek.start_date, 7);
+    const defaultEnd = addDays(defaultStart, 7);
+    setNewWeekModal({ mode: 'duplicate', defaultStart, defaultEnd });
   };
-  const changeWeekDate = async (weekId, newDate) => { try { await api.updateWeek(weekId, { start_date: newDate }); const fresh = await api.getWeeks(); setWeeks(fresh || []); toast('Date modifiée', 'success'); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
+
+  const confirmNewWeek = async (startDate, endDate) => {
+    const existing = weeks.find(w => w.start_date === startDate);
+    if (existing) { setCurrentWeekId(existing.id); setNewWeekModal(null); return; }
+    try {
+      let w;
+      if (newWeekModal.mode === 'duplicate') {
+        w = await api.duplicateWeek(currentWeek.id, startDate, endDate);
+      } else {
+        w = await api.createWeek(startDate, endDate);
+      }
+      const fresh = await api.getWeeks();
+      setWeeks(fresh || []);
+      setCurrentWeekId(w.id);
+      toast(newWeekModal.mode === 'duplicate' ? 'Semaine dupliquée' : 'Nouvelle semaine créée', 'success');
+      setNewWeekModal(null);
+    } catch (e) { setError(e.message); toast(e.message, 'error'); }
+  };
+
+  const changeWeekDate = async (weekId, patch) => {
+    try { await api.updateWeek(weekId, patch); const fresh = await api.getWeeks(); setWeeks(fresh || []); toast('Date modifiée', 'success'); } catch (e) { setError(e.message); toast(e.message, 'error'); }
+  };
   const deleteWeek = (weekId) => {
     setConfirm({ title: 'Supprimer cette semaine ?', message: 'Cette action est définitive.', danger: true, confirmText: 'Supprimer',
       onConfirm: async () => { try { await api.deleteWeek(weekId); const newWeeks = weeks.filter(w => w.id !== weekId); setWeeks(newWeeks); if (currentWeekId === weekId) { if (newWeeks.length > 0) setCurrentWeekId(newWeeks[0].id); else { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); } } toast('Semaine supprimée', 'success'); } catch (e) { setError(e.message); toast(e.message, 'error'); } }
@@ -277,8 +306,8 @@ function StatsLeads({ session }) {
 
   useEffect(() => {
     const handler = (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); newWeek(); }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'd') { e.preventDefault(); duplicateWeek(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') { e.preventDefault(); openNewWeekModal(); }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'd') { e.preventDefault(); openDuplicateModal(); }
       if ((e.ctrlKey || e.metaKey) && e.key === 'p') { e.preventDefault(); setPdfMode('week'); }
     };
     window.addEventListener('keydown', handler);
@@ -287,12 +316,13 @@ function StatsLeads({ session }) {
 
   if (loading && weeks.length === 0) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="text-cyan-400 animate-spin" size={32} /></div>;
   if (!currentWeek || !calc) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400"><div>Initialisation...</div></div>;
-  const range = getWeekRange(currentWeek.start_date);
+  const range = getWeekRange(currentWeek);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
       {showChangePwd && <ChangePasswordModal onClose={() => setShowChangePwd(false)} />}
       <ConfirmModal open={!!confirm} onClose={() => setConfirm(null)} {...(confirm || {})} />
+      {newWeekModal && <NewWeekModal mode={newWeekModal.mode} defaultStart={newWeekModal.defaultStart} defaultEnd={newWeekModal.defaultEnd} onClose={() => setNewWeekModal(null)} onConfirm={confirmNewWeek} />}
       {pdfMode === 'week' && <WeekPdfModal currentWeek={currentWeek} calc={calc} range={range} session={session} onClose={() => setPdfMode(null)} />}
       {pdfMode === 'invoice' && <InvoicePdfModal currentWeek={currentWeek} calc={calc} range={range} session={session} onClose={() => setPdfMode(null)} />}
 
@@ -338,7 +368,7 @@ function StatsLeads({ session }) {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 py-6">
-        {activeTab === 'week' && <WeekView currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={duplicateWeek} newWeek={newWeek} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSaleRow} />}
+        {activeTab === 'week' && <WeekView currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={openDuplicateModal} newWeek={openNewWeekModal} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSaleRow} />}
         {activeTab === 'history' && <HistoryView weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} deleteWeek={deleteWeek} />}
         {activeTab === 'monthly' && <MonthlyView weeks={weeks} />}
       </div>
@@ -369,9 +399,26 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
           <div>
             <div className="text-xs uppercase tracking-widest text-cyan-400 mb-1 flex items-center gap-2"><Calendar size={14} /> Semaine en cours</div>
             {editingDate ? (
-              <div className="flex items-center gap-2"><input type="date" defaultValue={currentWeek.start_date} onBlur={async (e) => { await changeWeekDate(currentWeek.id, e.target.value); setEditingDate(false); }} onKeyDown={async (e) => { if (e.key === 'Enter') { await changeWeekDate(currentWeek.id, e.target.value); setEditingDate(false); } if (e.key === 'Escape') setEditingDate(false); }} autoFocus className="bg-slate-800 border border-cyan-500 rounded-lg px-3 py-1.5 text-slate-100" /><button onClick={() => setEditingDate(false)} className="text-xs text-slate-400">Annuler</button></div>
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-slate-400">Du</span>
+                  <input type="date" defaultValue={currentWeek.start_date}
+                    onBlur={async (e) => { if (e.target.value !== currentWeek.start_date) await changeWeekDate(currentWeek.id, { start_date: e.target.value }); }}
+                    className="bg-slate-800 border border-cyan-500 rounded-lg px-3 py-1.5 text-slate-100 text-sm" />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-slate-400">au</span>
+                  <input type="date" defaultValue={currentWeek.end_date || addDays(currentWeek.start_date, 7)}
+                    onBlur={async (e) => { if (e.target.value !== currentWeek.end_date) await changeWeekDate(currentWeek.id, { end_date: e.target.value }); }}
+                    className="bg-slate-800 border border-violet-500 rounded-lg px-3 py-1.5 text-slate-100 text-sm" />
+                </div>
+                <button onClick={() => setEditingDate(false)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">OK</button>
+              </div>
             ) : (
-              <h2 className="text-xl md:text-3xl font-bold cursor-pointer hover:text-cyan-300 transition" onClick={() => setEditingDate(true)} title="Cliquer pour modifier la date">Du <span className="text-cyan-300">{range.start}</span> au <span className="text-violet-300">{range.end}</span></h2>
+              <h2 className="text-xl md:text-3xl font-bold cursor-pointer hover:text-cyan-300 transition" onClick={() => setEditingDate(true)} title="Cliquer pour modifier les dates">
+                Du <span className="text-cyan-300">{range.start}</span> au <span className="text-violet-300">{range.end}</span>
+                <span className="text-xs text-slate-500 ml-2 font-normal">(modifier)</span>
+              </h2>
             )}
           </div>
           <div className="flex flex-wrap gap-2">
@@ -430,6 +477,79 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============== NEW WEEK MODAL ==============
+function NewWeekModal({ mode, defaultStart, defaultEnd, onClose, onConfirm }) {
+  const [startDate, setStartDate] = useState(defaultStart);
+  const [endDate, setEndDate] = useState(defaultEnd);
+  const [error, setError] = useState('');
+
+  const handleStartChange = (newStart) => {
+    setStartDate(newStart);
+    // Si la nouvelle date de début est >= date de fin, on ajuste la fin (+7 jours)
+    if (newStart >= endDate) setEndDate(addDays(newStart, 7));
+  };
+
+  const submit = () => {
+    if (!startDate || !endDate) return setError('Les deux dates sont obligatoires');
+    if (endDate <= startDate) return setError('La date de fin doit être après la date de début');
+    onConfirm(startDate, endDate);
+  };
+
+  const duration = startDate && endDate ? Math.round((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) : 0;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900 rounded-2xl border border-slate-700 p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-bold flex items-center gap-2">
+            {mode === 'duplicate' ? <Copy size={18} className="text-indigo-400" /> : <Plus size={18} className="text-cyan-400" />}
+            {mode === 'duplicate' ? 'Dupliquer la semaine' : 'Nouvelle semaine'}
+          </h2>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200"><X size={18} /></button>
+        </div>
+
+        {mode === 'duplicate' && (
+          <p className="text-sm text-slate-400 mb-4">Les sources et clients de la semaine actuelle seront copiés. Les montants seront remis à zéro.</p>
+        )}
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Date de début</label>
+            <input type="date" value={startDate} onChange={(e) => handleStartChange(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-cyan-500 focus:outline-none" />
+          </div>
+          <div>
+            <label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Date de fin</label>
+            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)}
+              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-slate-100 focus:border-violet-500 focus:outline-none" />
+          </div>
+
+          {duration > 0 && (
+            <div className="text-xs text-slate-500 text-center">
+              Durée : <span className="text-slate-300 font-medium">{duration} jour{duration > 1 ? 's' : ''}</span>
+            </div>
+          )}
+
+          <div className="flex gap-2 justify-end">
+            <button onClick={() => { setStartDate(defaultStart); setEndDate(addDays(defaultStart, 7)); }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">Reset (+7 jours)</button>
+            <button onClick={() => { setStartDate(defaultStart); setEndDate(addDays(defaultStart, 13)); }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">2 semaines</button>
+            <button onClick={() => { const d = new Date(defaultStart); const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0); setEndDate(toIsoDate(lastDay)); }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">Fin du mois</button>
+          </div>
+
+          {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300">{error}</div>}
+
+          <div className="flex gap-2 justify-end pt-2">
+            <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Annuler</button>
+            <button onClick={submit} className={`px-4 py-2 rounded-lg text-sm font-medium text-white ${mode === 'duplicate' ? 'bg-indigo-600 hover:bg-indigo-500' : 'bg-cyan-600 hover:bg-cyan-500'}`}>
+              {mode === 'duplicate' ? 'Dupliquer' : 'Créer'}
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -709,7 +829,7 @@ function HistoryView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab, del
             </div>
             <div className="divide-y divide-slate-800/70">
               {monthWeeks.map(w => {
-                const r = getWeekRange(w.start_date);
+                const r = getWeekRange(w);
                 const isActive = w.id === currentWeekId;
                 return (
                   <div key={w.id} className={`px-5 py-3 flex flex-col md:flex-row md:items-center gap-3 hover:bg-slate-800/40 transition ${isActive ? 'bg-cyan-900/20' : ''}`}>
