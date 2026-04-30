@@ -107,7 +107,8 @@ const computeWeekStats = (w) => {
   const pvLeads = w.lead_sources?.filter(x => x.category === 'PV') || [];
   const iteSales = w.sales?.filter(x => x.category === 'ITE') || [];
   const pvSales = w.sales?.filter(x => x.category === 'PV') || [];
-  const iteCost = sum(iteLeads, 'cost'), iteLeadsCount = sum(iteLeads, 'leads'), iteCA = sum(iteSales, 'ca'), iteMarge = sum(iteSales, 'marge');
+  const iteCost = sum(iteLeads, 'cost'), iteLeadsCount = sum(iteLeads, 'leads'), iteCA = sum(iteSales, 'ca');
+  const iteMarge = iteCA - iteCost; // calcul auto
   const pvCost = sum(pvLeads, 'cost'), pvLeadsCount = sum(pvLeads, 'leads'), pvCA = sum(pvSales, 'ca');
   const cesarCost = Number(w.cesar_cost) || 0, sachaCost = Number(w.sacha_cost) || 0;
   const totalCA = iteCA + pvCA, totalCost = iteCost + pvCost + cesarCost + sachaCost, totalMarge = totalCA - totalCost;
@@ -544,7 +545,7 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         <Card title="ITE — Leads" accent="cyan" icon="📥"><LeadTable rows={calc.iteLeads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, 'ITE')} totalCost={calc.iteCost} totalLeads={calc.iteLeadsCount} cm={calc.cmIte} accent="cyan" /></Card>
-        <Card title="ITE — Ventes" accent="emerald" icon="💰"><SalesTableIte rows={calc.iteSales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, 'ITE')} /></Card>
+        <Card title="ITE — Ventes" accent="emerald" icon="💰"><SalesTableIte rows={calc.iteSales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, 'ITE')} totalCA={calc.iteCA} iteCost={calc.iteCost} /></Card>
         <Card title="PV — Leads" accent="orange" icon="☀️"><LeadTable rows={calc.pvLeads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, 'PV')} totalCost={calc.pvCost} totalLeads={calc.pvLeadsCount} cm={calc.cmPv} accent="orange" /></Card>
         <Card title="PV — Ventes" accent="emerald" icon="💰"><SalesTablePv rows={calc.pvSales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, 'PV')} /></Card>
       </div>
@@ -781,20 +782,33 @@ function LeadTable({ rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm,
   );
 }
 
-function SalesTableIte({ rows, onUpdate, onDelete, onAdd }) {
+function SalesTableIte({ rows, onUpdate, onDelete, onAdd, totalCA, iteCost }) {
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
+  const marge = totalCA - iteCost;
+  const margePct = iteCost > 0 ? (marge / iteCost) * 100 : 0;
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
-        <thead><tr className="text-slate-400 border-b border-slate-700"><th className="text-left py-2 px-2 font-medium">Client</th><th className="text-right py-2 px-2 font-medium w-24">CA</th><th className="text-right py-2 px-2 font-medium w-24">Marge</th><th className="text-right py-2 px-2 font-medium w-16">Leads</th><th className="w-8"></th></tr></thead>
+        <thead><tr className="text-slate-400 border-b border-slate-700"><th className="text-left py-2 px-2 font-medium">Client</th><th className="text-right py-2 px-2 font-medium w-28">CA</th><th className="text-right py-2 px-2 font-medium w-16">Leads</th><th className="w-8"></th></tr></thead>
         <tbody>
           {sorted.map(r => <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 group">
             <td className="py-1.5 px-2"><DebouncedInput value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
             <td className="py-1.5 px-2"><DebouncedInput type="number" step="0.01" value={r.ca} onCommit={(v) => onUpdate(r.id, { ca: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
-            <td className="py-1.5 px-2"><DebouncedInput type="number" step="0.01" value={r.marge} onCommit={(v) => onUpdate(r.id, { marge: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
             <td className="py-1.5 px-2"><DebouncedInput type="number" value={r.leads} onCommit={(v) => onUpdate(r.id, { leads: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
             <td className="py-1.5 px-1"><button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={14} /></button></td>
           </tr>)}
+          <tr className="bg-emerald-900/30 font-semibold">
+            <td className="py-2 px-2">TOTAL CA</td>
+            <td className="py-2 px-2 text-right">{fmtEur(totalCA)}</td>
+            <td className="py-2 px-2 text-right">{rows.reduce((s, r) => s + (Number(r.leads) || 0), 0)}</td>
+            <td></td>
+          </tr>
+          <tr className={`${marge >= 0 ? 'bg-emerald-900/40' : 'bg-rose-900/30'} font-bold border-t-2 border-slate-700`}>
+            <td className="py-2 px-2 text-xs uppercase tracking-wide opacity-80">Marge auto (CA − Coût ITE)</td>
+            <td className={`py-2 px-2 text-right ${margeColor(marge)}`}>{fmtEur(marge)}</td>
+            <td className={`py-2 px-2 text-right text-xs ${margeColor(margePct)}`}>{fmtPct(margePct)}</td>
+            <td></td>
+          </tr>
         </tbody>
       </table>
       <button onClick={onAdd} className="mt-2 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter un client</button>
