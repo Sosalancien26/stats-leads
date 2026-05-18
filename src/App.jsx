@@ -80,12 +80,14 @@ const getMonthLabel = (key) => { const [y, m] = key.split('-'); return `${MOIS_F
 
 const computeProductStats = (w, category) => {
   const sum = (arr, key) => arr.reduce((s, x) => s + (Number(x[key]) || 0), 0);
+  const sumDays = (arr) => arr.reduce((s, x) => s + (Number(x.leads_mon) || 0) + (Number(x.leads_tue) || 0) + (Number(x.leads_wed) || 0) + (Number(x.leads_thu) || 0) + (Number(x.leads_fri) || 0) + (Number(x.leads_sat) || 0) + (Number(x.leads_sun) || 0), 0);
   const leads = w.lead_sources?.filter(x => x.category === category) || [];
   const sales = w.sales?.filter(x => x.category === category) || [];
   const cost = sum(leads, 'cost');
   const leadsCount = sum(leads, 'leads');
   const ca = sum(sales, 'ca');
-  const salesLeads = sum(sales, 'leads');
+  // salesLeads = somme des leads journaliers (lundi à dimanche) au lieu de l'ancien champ 'leads'
+  const salesLeads = sumDays(sales);
   const marge = ca - cost;
   return {
     leads, sales, cost, leadsCount, ca, salesLeads, marge,
@@ -628,9 +630,10 @@ function WeekPdfModal({ currentWeek, calc, range, session, onClose }) {
                   <table className="w-full border border-slate-300" style={{ fontSize: '8px' }}>
                     <thead className="bg-slate-100"><tr><th className="text-left px-1 py-0.5 border-b border-slate-300">Client</th><th className="text-right px-1 py-0.5 border-b border-slate-300">CA</th><th className="text-right px-1 py-0.5 border-b border-slate-300">Lds</th></tr></thead>
                     <tbody>
-                      {[...s.sales].sort((a, b) => a.position - b.position).map(r => (
-                        <tr key={r.id} className="border-b border-slate-200"><td className="px-1 py-0.5 truncate max-w-[120px]">{r.client_name}</td><td className="text-right px-1 py-0.5">{fmtEurShort(r.ca)}</td><td className="text-right px-1 py-0.5">{r.leads}</td></tr>
-                      ))}
+                      {[...s.sales].sort((a, b) => a.position - b.position).map(r => {
+                        const totalDays = (Number(r.leads_mon)||0)+(Number(r.leads_tue)||0)+(Number(r.leads_wed)||0)+(Number(r.leads_thu)||0)+(Number(r.leads_fri)||0)+(Number(r.leads_sat)||0)+(Number(r.leads_sun)||0);
+                        return <tr key={r.id} className="border-b border-slate-200"><td className="px-1 py-0.5 truncate max-w-[120px]">{r.client_name}</td><td className="text-right px-1 py-0.5">{fmtEurShort(r.ca)}</td><td className="text-right px-1 py-0.5">{totalDays}</td></tr>;
+                      })}
                       <tr className="bg-slate-100 font-bold"><td className="px-1 py-0.5">TOTAL CA</td><td className="text-right px-1 py-0.5">{fmtEurShort(s.ca)}</td><td className="text-right px-1 py-0.5">{s.salesLeads}</td></tr>
                       <tr className={s.marge >= 0 ? 'bg-emerald-50' : 'bg-rose-50'}>
                         <td className="px-1 py-0.5 font-bold">Marge ({fmtPct(s.margePct)})</td>
@@ -996,28 +999,55 @@ function LeadTable({ rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm,
 
 function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge, margePct }) {
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
-  const totalLeads = rows.reduce((s, r) => s + (Number(r.leads) || 0), 0);
+  const DAYS = [
+    { key: 'leads_mon', label: 'L' },
+    { key: 'leads_tue', label: 'M' },
+    { key: 'leads_wed', label: 'M' },
+    { key: 'leads_thu', label: 'J' },
+    { key: 'leads_fri', label: 'V' },
+    { key: 'leads_sat', label: 'S' },
+    { key: 'leads_sun', label: 'D' },
+  ];
+  const sumDay = (key) => rows.reduce((s, r) => s + (Number(r[key]) || 0), 0);
+  const rowTotal = (r) => DAYS.reduce((s, d) => s + (Number(r[d.key]) || 0), 0);
+  const grandTotalLeads = rows.reduce((s, r) => s + rowTotal(r), 0);
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead><tr className="text-slate-400 border-b border-slate-700"><th className="text-left py-2 px-2 font-medium">Client</th><th className="text-right py-2 px-2 font-medium w-28">CA</th><th className="text-right py-2 px-2 font-medium w-16">Leads</th><th className="w-8"></th></tr></thead>
+      <table className="w-full text-xs">
+        <thead>
+          <tr className="text-slate-400 border-b border-slate-700">
+            <th className="text-left py-2 px-1 font-medium">Client</th>
+            {DAYS.map((d, i) => <th key={i} className="text-center py-2 px-1 font-medium w-7" title={['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'][i]}>{d.label}</th>)}
+            <th className="text-right py-2 px-1 font-medium w-12">Tot.</th>
+            <th className="text-right py-2 px-1 font-medium w-20">CA</th>
+            <th className="w-6"></th>
+          </tr>
+        </thead>
         <tbody>
-          {sorted.map(r => <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 group">
-            <td className="py-1.5 px-2"><DebouncedInput value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
-            <td className="py-1.5 px-2"><DebouncedInput type="number" step="0.01" value={r.ca} onCommit={(v) => onUpdate(r.id, { ca: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
-            <td className="py-1.5 px-2"><DebouncedInput type="number" value={r.leads} onCommit={(v) => onUpdate(r.id, { leads: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
-            <td className="py-1.5 px-1"><button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={14} /></button></td>
-          </tr>)}
+          {sorted.map(r => {
+            const total = rowTotal(r);
+            return <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 group">
+              <td className="py-1 px-1"><DebouncedInput value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
+              {DAYS.map((d, i) => (
+                <td key={i} className="py-1 px-0.5">
+                  <DebouncedInput type="number" value={r[d.key]} onCommit={(v) => onUpdate(r.id, { [d.key]: v })} className="w-full bg-transparent focus:bg-slate-800 px-0.5 py-0.5 rounded outline-none text-center focus:ring-1 focus:ring-slate-600" />
+                </td>
+              ))}
+              <td className="py-1 px-1 text-right font-bold text-cyan-300 bg-slate-800/30">{total}</td>
+              <td className="py-1 px-1"><DebouncedInput type="number" step="0.01" value={r.ca} onCommit={(v) => onUpdate(r.id, { ca: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
+              <td className="py-1 px-0"><button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={12} /></button></td>
+            </tr>;
+          })}
           <tr className="bg-emerald-900/30 font-semibold">
-            <td className="py-2 px-2">TOTAL CA</td>
-            <td className="py-2 px-2 text-right">{fmtEur(totalCA)}</td>
-            <td className="py-2 px-2 text-right">{totalLeads}</td>
+            <td className="py-2 px-1">TOTAL</td>
+            {DAYS.map((d, i) => <td key={i} className="text-center py-2 px-1 text-emerald-300">{sumDay(d.key)}</td>)}
+            <td className="py-2 px-1 text-right text-emerald-300 bg-emerald-900/40">{grandTotalLeads}</td>
+            <td className="py-2 px-1 text-right">{fmtEur(totalCA)}</td>
             <td></td>
           </tr>
           <tr className={`${marge >= 0 ? 'bg-emerald-900/40' : 'bg-rose-900/30'} font-bold border-t-2 border-slate-700`}>
-            <td className="py-2 px-2 text-xs uppercase tracking-wide opacity-80">Marge auto</td>
-            <td className={`py-2 px-2 text-right ${margeColor(marge)}`}>{fmtEur(marge)}</td>
-            <td className={`py-2 px-2 text-right text-xs ${margeColor(margePct)}`}>{fmtPct(margePct)}</td>
+            <td colSpan={DAYS.length + 1} className="py-2 px-1 text-xs uppercase tracking-wide opacity-80">Marge auto ({fmtPct(margePct)})</td>
+            <td className={`py-2 px-1 text-right ${margeColor(marge)}`} colSpan={2}>{fmtEur(marge)}</td>
             <td></td>
           </tr>
         </tbody>
