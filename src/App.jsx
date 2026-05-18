@@ -81,12 +81,13 @@ const getMonthLabel = (key) => { const [y, m] = key.split('-'); return `${MOIS_F
 const computeProductStats = (w, category) => {
   const sum = (arr, key) => arr.reduce((s, x) => s + (Number(x[key]) || 0), 0);
   const sumDays = (arr) => arr.reduce((s, x) => s + (Number(x.leads_mon) || 0) + (Number(x.leads_tue) || 0) + (Number(x.leads_wed) || 0) + (Number(x.leads_thu) || 0) + (Number(x.leads_fri) || 0) + (Number(x.leads_sat) || 0) + (Number(x.leads_sun) || 0), 0);
+  const rowDays = (x) => (Number(x.leads_mon) || 0) + (Number(x.leads_tue) || 0) + (Number(x.leads_wed) || 0) + (Number(x.leads_thu) || 0) + (Number(x.leads_fri) || 0) + (Number(x.leads_sat) || 0) + (Number(x.leads_sun) || 0);
   const leads = w.lead_sources?.filter(x => x.category === category) || [];
   const sales = w.sales?.filter(x => x.category === category) || [];
   const cost = sum(leads, 'cost');
   const leadsCount = sum(leads, 'leads');
-  const ca = sum(sales, 'ca');
-  // salesLeads = somme des leads journaliers (lundi à dimanche) au lieu de l'ancien champ 'leads'
+  // CA calculé : pour chaque client, leads journaliers × prix unitaire
+  const ca = sales.reduce((s, x) => s + (rowDays(x) * (Number(x.price_per_lead) || 0)), 0);
   const salesLeads = sumDays(sales);
   const marge = ca - cost;
   return {
@@ -100,8 +101,13 @@ const computeWeekStats = (w) => {
   const ite = computeProductStats(w, 'ITE');
   const pv = computeProductStats(w, 'PV');
   const pac = computeProductStats(w, 'PAC');
-  const cesarCost = Number(w.cesar_cost) || 0;
-  const sachaCost = Number(w.sacha_cost) || 0;
+  // Coûts annexes AUTO :
+  // Cesar = 10% du coût total des leads
+  // Sacha = 0.50€ × nombre de leads vendus (somme des jours, tous produits)
+  const totalLeadsCost = ite.cost + pv.cost + pac.cost;
+  const totalSalesLeads = ite.salesLeads + pv.salesLeads + pac.salesLeads;
+  const cesarCost = totalLeadsCost * 0.10;
+  const sachaCost = totalSalesLeads * 0.50;
   const totalCA = ite.ca + pv.ca + pac.ca;
   const totalCost = ite.cost + pv.cost + pac.cost + cesarCost + sachaCost;
   const totalMarge = totalCA - totalCost;
@@ -110,7 +116,8 @@ const computeWeekStats = (w) => {
     cesarMarge: -cesarCost, sachaMarge: -sachaCost,
     totalCA, totalCost, totalMarge,
     totalLeads: ite.leadsCount + pv.leadsCount + pac.leadsCount,
-    totalSalesLeads: ite.salesLeads + pv.salesLeads + pac.salesLeads,
+    totalSalesLeads,
+    totalLeadsCost,
     totalMargePct: totalCost > 0 ? (totalMarge / totalCost) * 100 : 0,
   };
 };
@@ -454,10 +461,22 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
         );
       })}
 
-      <Card title="Coûts annexes" accent="fuchsia" icon="⚙️">
+      <Card title="Coûts annexes (calcul auto)" accent="fuchsia" icon="⚙️">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <CostInput label="Coût Cesar (€)" value={currentWeek.cesar_cost} onChange={(v) => patchWeek(currentWeek.id, { cesar_cost: v })} />
-          <CostInput label="Coût Sacha (€)" value={currentWeek.sacha_cost} onChange={(v) => patchWeek(currentWeek.id, { sacha_cost: v })} />
+          <div className="bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/40">
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm text-slate-300 font-medium">Coût Cesar</span>
+              <span className="text-lg font-bold text-fuchsia-300">{fmtEur(calc.cesarCost)}</span>
+            </div>
+            <div className="text-xs text-slate-500">10% du coût total des leads ({fmtEur(calc.totalLeadsCost)})</div>
+          </div>
+          <div className="bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/40">
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-sm text-slate-300 font-medium">Coût Sacha</span>
+              <span className="text-lg font-bold text-fuchsia-300">{fmtEur(calc.sachaCost)}</span>
+            </div>
+            <div className="text-xs text-slate-500">0,50 € × {calc.totalSalesLeads} leads vendus</div>
+          </div>
         </div>
       </Card>
 
@@ -468,8 +487,8 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
             <thead><tr className="text-violet-300 border-b border-violet-800/50"><th className="text-left py-2 px-3 font-medium">Tableau</th><th className="text-right py-2 px-3 font-medium">CA</th><th className="text-right py-2 px-3 font-medium">Coût</th><th className="text-right py-2 px-3 font-medium">Marge</th><th className="text-right py-2 px-3 font-medium">%</th></tr></thead>
             <tbody>
               {PRODUCTS.map(prod => { const s = calc[prod.key.toLowerCase()]; return <MargeRow key={prod.key} label={prod.label} ca={s.ca} cost={s.cost} marge={s.marge} pct={s.margePct} />; })}
-              <MargeRow label="CESAR" ca={0} cost={calc.cesarCost} marge={calc.cesarMarge} pct={calc.cesarCost > 0 ? -100 : 0} />
-              <MargeRow label="SACHA" ca={0} cost={calc.sachaCost} marge={calc.sachaMarge} pct={calc.sachaCost > 0 ? -100 : 0} />
+              <MargeRow label="CESAR (10%)" ca={0} cost={calc.cesarCost} marge={calc.cesarMarge} pct={calc.cesarCost > 0 ? -100 : 0} />
+              <MargeRow label="SACHA (0,50€/lead)" ca={0} cost={calc.sachaCost} marge={calc.sachaMarge} pct={calc.sachaCost > 0 ? -100 : 0} />
               <tr className="border-t-2 border-violet-700 font-bold bg-violet-900/40">
                 <td className="py-3 px-3 text-violet-100">TOTAL</td>
                 <td className="py-3 px-3 text-right text-violet-100">{fmtEur(calc.totalCA)}</td>
@@ -628,16 +647,19 @@ function WeekPdfModal({ currentWeek, calc, range, session, onClose }) {
                 </div>
                 <div>
                   <table className="w-full border border-slate-300" style={{ fontSize: '8px' }}>
-                    <thead className="bg-slate-100"><tr><th className="text-left px-1 py-0.5 border-b border-slate-300">Client</th><th className="text-right px-1 py-0.5 border-b border-slate-300">CA</th><th className="text-right px-1 py-0.5 border-b border-slate-300">Lds</th></tr></thead>
+                    <thead className="bg-slate-100"><tr><th className="text-left px-1 py-0.5 border-b border-slate-300">Client</th><th className="text-right px-1 py-0.5 border-b border-slate-300">Lds</th><th className="text-right px-1 py-0.5 border-b border-slate-300">€/L</th><th className="text-right px-1 py-0.5 border-b border-slate-300">CA</th></tr></thead>
                     <tbody>
                       {[...s.sales].sort((a, b) => a.position - b.position).map(r => {
                         const totalDays = (Number(r.leads_mon)||0)+(Number(r.leads_tue)||0)+(Number(r.leads_wed)||0)+(Number(r.leads_thu)||0)+(Number(r.leads_fri)||0)+(Number(r.leads_sat)||0)+(Number(r.leads_sun)||0);
-                        return <tr key={r.id} className="border-b border-slate-200"><td className="px-1 py-0.5 truncate max-w-[120px]">{r.client_name}</td><td className="text-right px-1 py-0.5">{fmtEurShort(r.ca)}</td><td className="text-right px-1 py-0.5">{totalDays}</td></tr>;
+                        const ppl = Number(r.price_per_lead) || 0;
+                        const rowCA = totalDays * ppl;
+                        if (totalDays === 0 && ppl === 0) return null;
+                        return <tr key={r.id} className="border-b border-slate-200"><td className="px-1 py-0.5 truncate max-w-[100px]">{r.client_name}</td><td className="text-right px-1 py-0.5">{totalDays}</td><td className="text-right px-1 py-0.5">{ppl > 0 ? fmtEur(ppl) : '—'}</td><td className="text-right px-1 py-0.5 font-medium">{fmtEurShort(rowCA)}</td></tr>;
                       })}
-                      <tr className="bg-slate-100 font-bold"><td className="px-1 py-0.5">TOTAL CA</td><td className="text-right px-1 py-0.5">{fmtEurShort(s.ca)}</td><td className="text-right px-1 py-0.5">{s.salesLeads}</td></tr>
+                      <tr className="bg-slate-100 font-bold"><td className="px-1 py-0.5">TOTAL</td><td className="text-right px-1 py-0.5">{s.salesLeads}</td><td className="text-right px-1 py-0.5">—</td><td className="text-right px-1 py-0.5">{fmtEurShort(s.ca)}</td></tr>
                       <tr className={s.marge >= 0 ? 'bg-emerald-50' : 'bg-rose-50'}>
                         <td className="px-1 py-0.5 font-bold">Marge ({fmtPct(s.margePct)})</td>
-                        <td colSpan={2} className={`text-right px-1 py-0.5 font-bold ${s.marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEurShort(s.marge)}</td>
+                        <td colSpan={3} className={`text-right px-1 py-0.5 font-bold ${s.marge >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>{fmtEurShort(s.marge)}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -694,11 +716,13 @@ function PdfMargeRow({ label, ca, cost, marge, pct }) {
 // ============== PDF MODAL : À FACTURER ==============
 function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
   const handlePrint = () => window.print();
+  const rowDays = (x) => (Number(x.leads_mon)||0)+(Number(x.leads_tue)||0)+(Number(x.leads_wed)||0)+(Number(x.leads_thu)||0)+(Number(x.leads_fri)||0)+(Number(x.leads_sat)||0)+(Number(x.leads_sun)||0);
+  const rowCA = (x) => rowDays(x) * (Number(x.price_per_lead) || 0);
   const allClients = PRODUCTS.flatMap(prod => {
     const stats = calc[prod.key.toLowerCase()];
-    return stats.sales.filter(s => Number(s.ca) > 0).map(s => ({ ...s, productLabel: prod.label }));
+    return stats.sales.filter(s => rowCA(s) > 0).map(s => ({ ...s, productLabel: prod.label, _ca: rowCA(s), _leads: rowDays(s) }));
   });
-  const totalAFacturer = allClients.reduce((sum, c) => sum + Number(c.ca || 0), 0);
+  const totalAFacturer = allClients.reduce((sum, c) => sum + c._ca, 0);
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950 overflow-auto">
@@ -1015,10 +1039,11 @@ function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge,
     <div className="overflow-x-auto">
       <table className="w-full text-xs">
         <thead>
-          <tr className="text-slate-400 border-b border-slate-700">
+          <tr className="text-slate-300 border-b border-slate-600">
             <th className="text-left py-2 px-1 font-medium">Client</th>
-            {DAYS.map((d, i) => <th key={i} className="text-center py-2 px-1 font-medium w-7" title={['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'][i]}>{d.label}</th>)}
-            <th className="text-right py-2 px-1 font-medium w-12">Tot.</th>
+            {DAYS.map((d, i) => <th key={i} className="text-center py-2 px-1 font-semibold w-7 text-cyan-400" title={['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'][i]}>{d.label}</th>)}
+            <th className="text-right py-2 px-1 font-semibold w-12 text-slate-200">Tot.</th>
+            <th className="text-right py-2 px-1 font-medium w-16 text-amber-300">€/Lead</th>
             <th className="text-right py-2 px-1 font-medium w-20">CA</th>
             <th className="w-6"></th>
           </tr>
@@ -1026,28 +1051,38 @@ function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge,
         <tbody>
           {sorted.map(r => {
             const total = rowTotal(r);
+            const ppl = Number(r.price_per_lead) || 0;
+            const computedCA = total * ppl;
             return <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 group">
-              <td className="py-1 px-1"><DebouncedInput value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
+              <td className="py-1 px-1"><DebouncedInput value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
               {DAYS.map((d, i) => (
                 <td key={i} className="py-1 px-0.5">
-                  <DebouncedInput type="number" value={r[d.key]} onCommit={(v) => onUpdate(r.id, { [d.key]: v })} className="w-full bg-transparent focus:bg-slate-800 px-0.5 py-0.5 rounded outline-none text-center focus:ring-1 focus:ring-slate-600" />
+                  <DebouncedInput type="number" value={r[d.key]} onCommit={(v) => onUpdate(r.id, { [d.key]: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-0.5 py-0.5 rounded outline-none text-center focus:ring-1 focus:ring-slate-600" />
                 </td>
               ))}
-              <td className="py-1 px-1 text-right font-bold text-cyan-300 bg-slate-800/30">{total}</td>
-              <td className="py-1 px-1"><DebouncedInput type="number" step="0.01" value={r.ca} onCommit={(v) => onUpdate(r.id, { ca: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
+              <td className={`py-1 px-1 text-right font-bold bg-slate-800/50 ${total > 0 ? 'text-cyan-300' : 'text-slate-500'}`}>{total}</td>
+              <td className="py-1 px-1">
+                <DebouncedInput type="number" step="0.01" value={r.price_per_lead || 0} onCommit={(v) => onUpdate(r.id, { price_per_lead: v, ca: rowTotal(r) * v })}
+                  className={`w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-amber-600 ${ppl > 0 ? 'text-amber-300 font-medium' : 'text-slate-500'}`} />
+              </td>
+              <td className={`py-1 px-1 text-right font-medium ${computedCA > 0 ? 'text-emerald-300' : 'text-slate-500'}`}>{fmtEur(computedCA)}</td>
               <td className="py-1 px-0"><button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={12} /></button></td>
             </tr>;
           })}
-          <tr className="bg-emerald-900/30 font-semibold">
-            <td className="py-2 px-1">TOTAL</td>
-            {DAYS.map((d, i) => <td key={i} className="text-center py-2 px-1 text-emerald-300">{sumDay(d.key)}</td>)}
-            <td className="py-2 px-1 text-right text-emerald-300 bg-emerald-900/40">{grandTotalLeads}</td>
-            <td className="py-2 px-1 text-right">{fmtEur(totalCA)}</td>
+          <tr className="bg-emerald-900/40 font-bold border-t border-emerald-700/40">
+            <td className="py-2 px-1 text-emerald-200">TOTAL</td>
+            {DAYS.map((d, i) => {
+              const v = sumDay(d.key);
+              return <td key={i} className={`text-center py-2 px-1 ${v > 0 ? 'text-emerald-200' : 'text-slate-500'}`}>{v}</td>;
+            })}
+            <td className={`py-2 px-1 text-right bg-emerald-800/40 ${grandTotalLeads > 0 ? 'text-emerald-100' : 'text-slate-400'}`}>{grandTotalLeads}</td>
+            <td className="py-2 px-1"></td>
+            <td className="py-2 px-1 text-right text-emerald-100">{fmtEur(totalCA)}</td>
             <td></td>
           </tr>
-          <tr className={`${marge >= 0 ? 'bg-emerald-900/40' : 'bg-rose-900/30'} font-bold border-t-2 border-slate-700`}>
-            <td colSpan={DAYS.length + 1} className="py-2 px-1 text-xs uppercase tracking-wide opacity-80">Marge auto ({fmtPct(margePct)})</td>
-            <td className={`py-2 px-1 text-right ${margeColor(marge)}`} colSpan={2}>{fmtEur(marge)}</td>
+          <tr className={`${marge >= 0 ? 'bg-emerald-900/50' : 'bg-rose-900/40'} font-bold border-t-2 border-slate-600`}>
+            <td colSpan={DAYS.length + 2} className="py-2 px-1 text-xs uppercase tracking-wide text-slate-200">Marge auto ({fmtPct(margePct)})</td>
+            <td className={`py-2 px-1 text-right ${marge >= 0 ? 'text-emerald-300' : 'text-rose-300'}`} colSpan={2}>{fmtEur(marge)}</td>
             <td></td>
           </tr>
         </tbody>
