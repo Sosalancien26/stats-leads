@@ -224,7 +224,7 @@ function StatsLeads({ session }) {
   const toast = useToast();
   const [weeks, setWeeks] = useState(() => { try { const c = localStorage.getItem(CACHE_KEY); return c ? JSON.parse(c) : []; } catch (e) { return []; } });
   const [currentWeekId, setCurrentWeekId] = useState(null);
-  const [activeTab, setActiveTab] = useState('week');
+  const [activeTab, setActiveTab] = useState('stats');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showChangePwd, setShowChangePwd] = useState(false);
@@ -379,7 +379,7 @@ function StatsLeads({ session }) {
 
       <div className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === 'week' && <WeekView currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={openDuplicateModal} newWeek={openNewWeekModal} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSaleRow} />}
-        {activeTab === 'stats' && <StatsView weeks={weeks} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} />}
+        {activeTab === 'stats' && <StatsView weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} />}
         {activeTab === 'history' && <HistoryView weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} deleteWeek={deleteWeek} />}
         {activeTab === 'monthly' && <MonthlyView weeks={weeks} />}
       </div>
@@ -776,9 +776,9 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
           <>
             {PRODUCTS.map(prod => {
               const stats = calc[prod.key.toLowerCase()];
-              const clients = stats.sales.filter(s => Number(s.ca) > 0);
+              const clients = stats.sales.filter(s => rowCA(s) > 0);
               if (clients.length === 0) return null;
-              const productTotal = clients.reduce((sum, c) => sum + Number(c.ca || 0), 0);
+              const productTotal = clients.reduce((sum, c) => sum + rowCA(c), 0);
               return (
                 <div key={prod.key} className="mb-2 pdf-section">
                   <h2 className="text-[11px] font-bold text-slate-900 border-b border-slate-300 pb-0.5 mb-1 flex items-center justify-between">
@@ -797,8 +797,8 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
                       {[...clients].sort((a, b) => a.position - b.position).map(c => (
                         <tr key={c.id} className="border-b border-slate-200">
                           <td className="px-2 py-1 font-medium">{c.client_name}</td>
-                          <td className="text-right px-2 py-1">{c.leads}</td>
-                          <td className="text-right px-2 py-1 font-bold text-amber-700">{fmtEur(c.ca)}</td>
+                          <td className="text-right px-2 py-1">{rowDays(c)}</td>
+                          <td className="text-right px-2 py-1 font-bold text-amber-700">{fmtEur(rowCA(c))}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -824,7 +824,7 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
 }
 
 // ============== STATS VIEW (style SuperHote) ==============
-function StatsView({ weeks, setCurrentWeekId, setActiveTab }) {
+function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
   const [period, setPeriod] = useState('week'); // 'week' | 'month' | 'year'
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
 
@@ -982,11 +982,17 @@ function StatsView({ weeks, setCurrentWeekId, setActiveTab }) {
               {rows.map((r, i) => {
                 const isEmpty = r.empty;
                 const clickable = period === 'week' && r.weekId;
+                const isCurrent = period === 'week' && r.weekId === currentWeekId;
                 return (
                   <tr key={r.id}
                     onClick={() => clickable && (setCurrentWeekId(r.weekId), setActiveTab('week'))}
-                    className={`border-b border-slate-800/50 transition ${clickable ? 'cursor-pointer hover:bg-slate-800/40' : ''} ${isEmpty ? 'opacity-40' : ''}`}>
-                    <td className="py-3 px-4 font-medium text-slate-200">{r.label}</td>
+                    className={`border-b border-slate-800/50 transition ${clickable ? 'cursor-pointer hover:bg-slate-800/40' : ''} ${isEmpty ? 'opacity-40' : ''} ${isCurrent ? 'bg-cyan-500/10 ring-1 ring-inset ring-cyan-400/40' : ''}`}>
+                    <td className="py-3 px-4 font-medium text-slate-200">
+                      <span className="flex items-center gap-2">
+                        {r.label}
+                        {isCurrent && <span className="text-[10px] uppercase tracking-wide bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded">En cours</span>}
+                      </span>
+                    </td>
                     <td className={`py-3 px-4 text-right ${r.ca > 0 ? 'text-cyan-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.ca)}</td>
                     <td className={`py-3 px-4 text-right ${r.cost > 0 ? 'text-amber-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.cost)}</td>
                     <td className={`py-3 px-4 text-right font-medium ${r.marge !== 0 ? margeColor(r.marge) : 'text-slate-500'}`}>{fmtEur(r.marge)}</td>
