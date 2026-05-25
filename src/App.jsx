@@ -362,6 +362,7 @@ function StatsLeads({ session }) {
           </div>
           <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl p-1">
             <TabButton active={activeTab === 'week'} onClick={() => setActiveTab('week')} icon={<Calendar size={15} />}>Semaine</TabButton>
+            <TabButton active={activeTab === 'stats'} onClick={() => setActiveTab('stats')} icon={<BarChart3 size={15} />}>Stats</TabButton>
             <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={15} />}>Historique</TabButton>
             <TabButton active={activeTab === 'monthly'} onClick={() => setActiveTab('monthly')} icon={<CalendarDays size={15} />}>Mensuel</TabButton>
           </div>
@@ -378,6 +379,7 @@ function StatsLeads({ session }) {
 
       <div className="max-w-7xl mx-auto px-4 py-6">
         {activeTab === 'week' && <WeekView currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={openDuplicateModal} newWeek={openNewWeekModal} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSaleRow} />}
+        {activeTab === 'stats' && <StatsView weeks={weeks} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} />}
         {activeTab === 'history' && <HistoryView weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} deleteWeek={deleteWeek} />}
         {activeTab === 'monthly' && <MonthlyView weeks={weeks} />}
       </div>
@@ -815,6 +817,201 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
               </table>
             </div>
           </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ============== STATS VIEW (style SuperHote) ==============
+function StatsView({ weeks, setCurrentWeekId, setActiveTab }) {
+  const [period, setPeriod] = useState('week'); // 'week' | 'month' | 'year'
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+
+  // Toutes les années disponibles
+  const allYears = useMemo(() => {
+    const years = new Set();
+    weeks.forEach(w => years.add(new Date(w.start_date).getFullYear()));
+    if (years.size === 0) years.add(new Date().getFullYear());
+    return [...years].sort((a, b) => b - a);
+  }, [weeks]);
+
+  // Toutes les semaines avec leurs stats
+  const allWeeksWithStats = useMemo(() => weeks.map(w => ({
+    ...w,
+    stats: computeWeekStats(w),
+    year: new Date(w.start_date).getFullYear(),
+    month: new Date(w.start_date).getMonth(),
+  })), [weeks]);
+
+  // Groupage par période sélectionnée
+  const rows = useMemo(() => {
+    if (period === 'week') {
+      return allWeeksWithStats
+        .filter(w => w.year === selectedYear)
+        .sort((a, b) => a.start_date.localeCompare(b.start_date))
+        .map(w => {
+          const r = getWeekRange(w);
+          return {
+            id: w.id,
+            label: `${r.start} → ${r.end}`,
+            ca: w.stats.totalCA,
+            cost: w.stats.totalCost,
+            marge: w.stats.totalMarge,
+            leads: w.stats.totalSalesLeads,
+            margePct: w.stats.totalMargePct,
+            weekId: w.id,
+          };
+        });
+    }
+    if (period === 'month') {
+      const monthMap = {};
+      allWeeksWithStats.filter(w => w.year === selectedYear).forEach(w => {
+        const key = w.month;
+        if (!monthMap[key]) monthMap[key] = { label: MOIS_FR[key], ca: 0, cost: 0, marge: 0, leads: 0, count: 0 };
+        monthMap[key].ca += w.stats.totalCA;
+        monthMap[key].cost += w.stats.totalCost;
+        monthMap[key].marge += w.stats.totalMarge;
+        monthMap[key].leads += w.stats.totalSalesLeads;
+        monthMap[key].count += 1;
+      });
+      return Array.from({ length: 12 }, (_, i) => ({
+        id: i,
+        label: MOIS_FR[i],
+        ca: monthMap[i]?.ca || 0,
+        cost: monthMap[i]?.cost || 0,
+        marge: monthMap[i]?.marge || 0,
+        leads: monthMap[i]?.leads || 0,
+        count: monthMap[i]?.count || 0,
+        margePct: (monthMap[i]?.cost || 0) > 0 ? ((monthMap[i].marge / monthMap[i].cost) * 100) : 0,
+        empty: !monthMap[i],
+      }));
+    }
+    // Year
+    const yearMap = {};
+    allWeeksWithStats.forEach(w => {
+      const key = w.year;
+      if (!yearMap[key]) yearMap[key] = { label: String(key), ca: 0, cost: 0, marge: 0, leads: 0, count: 0 };
+      yearMap[key].ca += w.stats.totalCA;
+      yearMap[key].cost += w.stats.totalCost;
+      yearMap[key].marge += w.stats.totalMarge;
+      yearMap[key].leads += w.stats.totalSalesLeads;
+      yearMap[key].count += 1;
+    });
+    return Object.keys(yearMap).sort((a, b) => Number(b) - Number(a)).map(k => ({
+      id: k,
+      label: yearMap[k].label,
+      ca: yearMap[k].ca,
+      cost: yearMap[k].cost,
+      marge: yearMap[k].marge,
+      leads: yearMap[k].leads,
+      count: yearMap[k].count,
+      margePct: yearMap[k].cost > 0 ? (yearMap[k].marge / yearMap[k].cost) * 100 : 0,
+    }));
+  }, [period, allWeeksWithStats, selectedYear]);
+
+  // Totaux
+  const totals = useMemo(() => rows.reduce((acc, r) => ({
+    ca: acc.ca + r.ca, cost: acc.cost + r.cost, marge: acc.marge + r.marge, leads: acc.leads + r.leads, count: acc.count + (r.count !== undefined ? r.count : 1),
+  }), { ca: 0, cost: 0, marge: 0, leads: 0, count: 0 }), [rows]);
+  const totalMargePct = totals.cost > 0 ? (totals.marge / totals.cost) * 100 : 0;
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800/50 rounded-2xl border border-slate-700/50 p-5">
+        <h2 className="text-2xl font-bold flex items-center gap-2"><BarChart3 className="text-violet-400" /> Statistiques</h2>
+        <p className="text-sm text-slate-400 mt-1">Vue récapitulative de toutes tes données</p>
+      </div>
+
+      {/* Switch période */}
+      <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl p-1 w-fit mx-auto">
+        <button onClick={() => setPeriod('week')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${period === 'week' ? 'bg-gradient-to-br from-cyan-600 to-violet-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}>Semaine</button>
+        <button onClick={() => setPeriod('month')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${period === 'month' ? 'bg-gradient-to-br from-cyan-600 to-violet-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}>Mois</button>
+        <button onClick={() => setPeriod('year')} className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${period === 'year' ? 'bg-gradient-to-br from-cyan-600 to-violet-600 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'}`}>Année</button>
+      </div>
+
+      {/* Sélecteur d'année (sauf en mode année) */}
+      {period !== 'year' && (
+        <div className="flex items-center justify-center gap-2">
+          <button onClick={() => { const idx = allYears.indexOf(selectedYear); if (idx < allYears.length - 1) setSelectedYear(allYears[idx + 1]); }}
+            disabled={allYears.indexOf(selectedYear) >= allYears.length - 1}
+            className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg"><ChevronLeft size={16} /></button>
+          <span className="text-xl font-bold text-cyan-300 min-w-[80px] text-center">{selectedYear}</span>
+          <button onClick={() => { const idx = allYears.indexOf(selectedYear); if (idx > 0) setSelectedYear(allYears[idx - 1]); }}
+            disabled={allYears.indexOf(selectedYear) <= 0}
+            className="p-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg"><ChevronRight size={16} /></button>
+        </div>
+      )}
+
+      {/* KPIs totaux */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <KPI icon={<Euro size={18} />} label="CA Total" value={fmtEur(totals.ca)} color="cyan" />
+        <KPI icon={<Target size={18} />} label="Coût Total" value={fmtEur(totals.cost)} color="amber" />
+        <KPI icon={totals.marge >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />} label="Marge" value={fmtEur(totals.marge)} color={totals.marge >= 0 ? 'emerald' : 'rose'} />
+        <KPI icon={<BarChart3 size={18} />} label="Leads vendus" value={totals.leads.toLocaleString('fr-FR')} color="violet" />
+      </div>
+
+      {/* Tableau récap */}
+      <div className="bg-slate-900/50 rounded-2xl border border-slate-700/50 overflow-hidden shadow-xl">
+        <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-5 py-3 border-b border-slate-700/50">
+          <h3 className="text-lg font-bold text-cyan-300">
+            {period === 'week' && `Semaines de ${selectedYear}`}
+            {period === 'month' && `Mois de ${selectedYear}`}
+            {period === 'year' && 'Toutes les années'}
+          </h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-slate-400 border-b border-slate-700 bg-slate-900/50">
+                <th className="text-left py-3 px-4 font-semibold">
+                  {period === 'week' ? 'Semaine' : period === 'month' ? 'Mois' : 'Année'}
+                </th>
+                <th className="text-right py-3 px-4 font-semibold">CA</th>
+                <th className="text-right py-3 px-4 font-semibold">Coût</th>
+                <th className="text-right py-3 px-4 font-semibold">Marge</th>
+                <th className="text-right py-3 px-4 font-semibold">Marge %</th>
+                <th className="text-right py-3 px-4 font-semibold">Leads</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr><td colSpan={6} className="text-center py-8 text-slate-500 italic">Aucune donnée pour cette période</td></tr>
+              )}
+              {rows.map((r, i) => {
+                const isEmpty = r.empty;
+                const clickable = period === 'week' && r.weekId;
+                return (
+                  <tr key={r.id}
+                    onClick={() => clickable && (setCurrentWeekId(r.weekId), setActiveTab('week'))}
+                    className={`border-b border-slate-800/50 transition ${clickable ? 'cursor-pointer hover:bg-slate-800/40' : ''} ${isEmpty ? 'opacity-40' : ''}`}>
+                    <td className="py-3 px-4 font-medium text-slate-200">{r.label}</td>
+                    <td className={`py-3 px-4 text-right ${r.ca > 0 ? 'text-cyan-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.ca)}</td>
+                    <td className={`py-3 px-4 text-right ${r.cost > 0 ? 'text-amber-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.cost)}</td>
+                    <td className={`py-3 px-4 text-right font-medium ${r.marge !== 0 ? margeColor(r.marge) : 'text-slate-500'}`}>{fmtEur(r.marge)}</td>
+                    <td className={`py-3 px-4 text-right font-medium ${r.margePct !== 0 ? margeColor(r.margePct) : 'text-slate-500'}`}>{fmtPct(r.margePct)}</td>
+                    <td className={`py-3 px-4 text-right ${r.leads > 0 ? 'text-violet-300 font-medium' : 'text-slate-500'}`}>{r.leads}</td>
+                  </tr>
+                );
+              })}
+              {rows.length > 0 && (
+                <tr className="bg-gradient-to-r from-violet-900/40 to-fuchsia-900/40 border-t-2 border-violet-700 font-bold">
+                  <td className="py-4 px-4 text-violet-100">TOTAL</td>
+                  <td className="py-4 px-4 text-right text-cyan-200">{fmtEur(totals.ca)}</td>
+                  <td className="py-4 px-4 text-right text-amber-200">{fmtEur(totals.cost)}</td>
+                  <td className={`py-4 px-4 text-right ${margeColor(totals.marge)}`}>{fmtEur(totals.marge)}</td>
+                  <td className={`py-4 px-4 text-right ${margeColor(totalMargePct)}`}>{fmtPct(totalMargePct)}</td>
+                  <td className="py-4 px-4 text-right text-violet-200">{totals.leads.toLocaleString('fr-FR')}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {period === 'week' && rows.length > 0 && (
+          <div className="bg-slate-900/80 px-5 py-2 text-xs text-slate-500 text-center border-t border-slate-800">
+            💡 Clique sur une semaine pour l'ouvrir
+          </div>
         )}
       </div>
     </div>
