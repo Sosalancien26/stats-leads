@@ -916,6 +916,51 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
   }), { ca: 0, cost: 0, marge: 0, leads: 0, count: 0 }), [rows]);
   const totalMargePct = totals.cost > 0 ? (totals.marge / totals.cost) * 100 : 0;
 
+  // Comparaison avec l'année précédente (pastilles de tendance des KPI)
+  const prevTotals = useMemo(() => {
+    if (period === 'year') return null;
+    const ws = allWeeksWithStats.filter(w => w.year === selectedYear - 1);
+    if (ws.length === 0) return null;
+    return ws.reduce((a, w) => ({ ca: a.ca + w.stats.totalCA, cost: a.cost + w.stats.totalCost, marge: a.marge + w.stats.totalMarge, leads: a.leads + w.stats.totalSalesLeads }), { ca: 0, cost: 0, marge: 0, leads: 0 });
+  }, [period, allWeeksWithStats, selectedYear]);
+  const variation = (cur, prev) => (prev === null || prev === undefined || prev === 0) ? null : ((cur - prev) / Math.abs(prev)) * 100;
+
+  // Variation de chaque ligne vs la précédente (ordre chronologique)
+  const rowsWithTrend = useMemo(() => {
+    const chrono = period === 'year' ? [...rows].reverse() : rows;
+    const prevById = {};
+    for (let i = 1; i < chrono.length; i++) prevById[chrono[i].id] = chrono[i - 1];
+    return rows.map(r => {
+      const prev = prevById[r.id];
+      const margeVar = (prev && !r.empty && !prev.empty && prev.marge !== 0) ? ((r.marge - prev.marge) / Math.abs(prev.marge)) * 100 : null;
+      return { ...r, margeVar };
+    });
+  }, [rows, period]);
+  const maxCA = useMemo(() => Math.max(1, ...rows.map(r => r.ca)), [rows]);
+
+  // Mini-courbe de la marge (ordre chronologique)
+  const sparkPoints = useMemo(() => {
+    const chrono = (period === 'year' ? [...rows].reverse() : rows).filter(r => !r.empty);
+    if (chrono.length < 2) return '';
+    const vals = chrono.map(r => r.marge);
+    const min = Math.min(...vals), max = Math.max(...vals), range = max - min || 1;
+    const W = 120, H = 28, pad = 3;
+    return chrono.map((r, i) => {
+      const x = pad + (i * (W - 2 * pad)) / (chrono.length - 1);
+      const y = pad + (1 - (r.marge - min) / range) * (H - 2 * pad);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+  }, [rows, period]);
+
+  // Couleur "heatmap" de la marge %
+  const heatPill = (pct) => {
+    if (pct >= 35) return 'bg-emerald-500/25 text-emerald-200 ring-1 ring-emerald-500/30';
+    if (pct >= 15) return 'bg-emerald-500/15 text-emerald-300';
+    if (pct >= 0) return 'bg-slate-600/30 text-slate-300';
+    if (pct >= -15) return 'bg-rose-500/15 text-rose-300';
+    return 'bg-rose-500/25 text-rose-200 ring-1 ring-rose-500/30';
+  };
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -946,20 +991,26 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
 
       {/* KPIs totaux */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPI icon={<Euro size={18} />} label="CA Total" value={fmtEur(totals.ca)} color="cyan" />
-        <KPI icon={<Target size={18} />} label="Coût Total" value={fmtEur(totals.cost)} color="amber" />
-        <KPI icon={totals.marge >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />} label="Marge" value={fmtEur(totals.marge)} color={totals.marge >= 0 ? 'emerald' : 'rose'} />
-        <KPI icon={<BarChart3 size={18} />} label="Leads vendus" value={totals.leads.toLocaleString('fr-FR')} color="violet" />
+        <KPIBig icon={<Euro size={18} />} label="CA Total" value={fmtEur(totals.ca)} variation={variation(totals.ca, prevTotals?.ca)} color="cyan" />
+        <KPIBig icon={<Target size={18} />} label="Coût Total" value={fmtEur(totals.cost)} variation={variation(totals.cost, prevTotals?.cost)} color="amber" inverseColor />
+        <KPIBig icon={totals.marge >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />} label="Marge" value={fmtEur(totals.marge)} variation={variation(totals.marge, prevTotals?.marge)} color={totals.marge >= 0 ? 'emerald' : 'rose'} />
+        <KPIBig icon={<BarChart3 size={18} />} label="Leads vendus" value={totals.leads.toLocaleString('fr-FR')} variation={variation(totals.leads, prevTotals?.leads)} color="violet" />
       </div>
 
       {/* Tableau récap */}
       <div className="bg-slate-900/50 rounded-2xl border border-slate-700/50 overflow-hidden shadow-xl">
-        <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-5 py-3 border-b border-slate-700/50">
+        <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-5 py-3 border-b border-slate-700/50 flex items-center justify-between gap-3">
           <h3 className="text-lg font-bold text-cyan-300">
             {period === 'week' && `Semaines de ${selectedYear}`}
             {period === 'month' && `Mois de ${selectedYear}`}
             {period === 'year' && 'Toutes les années'}
           </h3>
+          {sparkPoints && (
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-[10px] uppercase tracking-wider text-slate-500 hidden sm:inline">Tendance marge</span>
+              <svg viewBox="0 0 120 28" width="110" height="26"><polyline points={sparkPoints} fill="none" stroke="#34d399" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" /></svg>
+            </div>
+          )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -979,10 +1030,11 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
               {rows.length === 0 && (
                 <tr><td colSpan={6} className="text-center py-8 text-slate-500 italic">Aucune donnée pour cette période</td></tr>
               )}
-              {rows.map((r, i) => {
+              {rowsWithTrend.map((r, i) => {
                 const isEmpty = r.empty;
                 const clickable = period === 'week' && r.weekId;
                 const isCurrent = period === 'week' && r.weekId === currentWeekId;
+                const hasData = !isEmpty && (r.ca > 0 || r.cost > 0);
                 return (
                   <tr key={r.id}
                     onClick={() => clickable && (setCurrentWeekId(r.weekId), setActiveTab('week'))}
@@ -993,10 +1045,22 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
                         {isCurrent && <span className="text-[10px] uppercase tracking-wide bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded">En cours</span>}
                       </span>
                     </td>
-                    <td className={`py-3 px-4 text-right ${r.ca > 0 ? 'text-cyan-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.ca)}</td>
+                    <td className="py-3 px-4">
+                      <div className="flex items-center justify-end gap-2">
+                        <div className="hidden sm:block h-1.5 rounded-full bg-cyan-500/40" style={{ width: `${Math.round((r.ca / maxCA) * 56)}px` }}></div>
+                        <span className={r.ca > 0 ? 'text-cyan-300 font-medium' : 'text-slate-500'}>{fmtEur(r.ca)}</span>
+                      </div>
+                    </td>
                     <td className={`py-3 px-4 text-right ${r.cost > 0 ? 'text-amber-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.cost)}</td>
-                    <td className={`py-3 px-4 text-right font-medium ${r.marge !== 0 ? margeColor(r.marge) : 'text-slate-500'}`}>{fmtEur(r.marge)}</td>
-                    <td className={`py-3 px-4 text-right font-medium ${r.margePct !== 0 ? margeColor(r.margePct) : 'text-slate-500'}`}>{fmtPct(r.margePct)}</td>
+                    <td className="py-3 px-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span className={`font-medium ${r.marge !== 0 ? margeColor(r.marge) : 'text-slate-500'}`}>{fmtEur(r.marge)}</span>
+                        {r.margeVar !== null && <span className={`text-[10px] font-medium ${r.margeVar >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{r.margeVar >= 0 ? '▲' : '▼'}{Math.abs(Math.round(r.margeVar))}%</span>}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      <span className={`inline-block px-2 py-0.5 rounded-md text-xs font-medium ${hasData ? heatPill(r.margePct) : 'text-slate-500'}`}>{fmtPct(r.margePct)}</span>
+                    </td>
                     <td className={`py-3 px-4 text-right ${r.leads > 0 ? 'text-violet-300 font-medium' : 'text-slate-500'}`}>{r.leads}</td>
                   </tr>
                 );
