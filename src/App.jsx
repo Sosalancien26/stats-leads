@@ -746,32 +746,31 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
           <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Fermer</button>
         </div>
       </div>
-      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-6 shadow-2xl" style={{ fontSize: '10px', lineHeight: '1.3' }}>
-        <div className="flex justify-between items-end border-b-2 border-amber-600 pb-2 mb-3">
+      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-8 shadow-2xl" style={{ fontSize: '11px', lineHeight: '1.4' }}>
+        {/* Header */}
+        <div className="flex justify-between items-end pb-3 mb-5 border-b-2 border-slate-800">
           <div>
-            <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[8px] uppercase tracking-wider font-bold">État à facturer</span>
-            <h1 className="text-xl font-bold text-slate-900 mt-1 leading-tight">Récapitulatif de facturation</h1>
-            <p className="text-[10px] text-slate-600">Semaine du {range.start} au {range.end}</p>
+            <h1 className="text-2xl font-bold text-slate-900 leading-tight">À facturer</h1>
+            <p className="text-[11px] text-slate-600 mt-0.5">Semaine du {range.start} au {range.end}</p>
           </div>
-          <div className="text-right text-[9px]">
-            <div className="font-bold text-slate-900">{session.display_name}</div>
-            <div className="text-slate-500">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
+          <div className="text-right text-[10px] text-slate-500">
+            <div className="font-semibold text-slate-800">{session.display_name}</div>
+            <div>Édité le {new Date().toLocaleDateString('fr-FR')}</div>
           </div>
         </div>
 
-        <div className="bg-amber-50 border-2 border-amber-300 rounded p-3 mb-3 pdf-section">
-          <div className="flex justify-between items-center">
-            <div>
-              <div className="text-[9px] uppercase tracking-wider text-amber-800 font-bold">Total à réclamer</div>
-              <div className="text-2xl font-bold text-amber-900">{fmtEur(totalAFacturer)}</div>
-              <div className="text-[9px] text-amber-700">{allClients.length} client{allClients.length > 1 ? 's' : ''} • {calc.totalSalesLeads} leads vendus</div>
-            </div>
-            <Receipt size={36} className="text-amber-300" />
+        {/* Bloc total */}
+        <div className="bg-amber-50 border border-amber-300 rounded-lg px-5 py-4 mb-5 pdf-section flex items-center justify-between">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">Montant total à facturer</div>
+            <div className="text-3xl font-bold text-amber-900 leading-tight mt-0.5">{fmtEur(totalAFacturer)}</div>
+            <div className="text-[10px] text-amber-700 mt-0.5">{allClients.length} client{allClients.length > 1 ? 's' : ''} • {allClients.reduce((s, c) => s + c._leads, 0)} leads vendus</div>
           </div>
+          <Receipt size={40} className="text-amber-400" />
         </div>
 
         {allClients.length === 0 ? (
-          <div className="text-center py-8 text-slate-500 italic text-[10px]">Aucun client à facturer pour cette semaine.</div>
+          <div className="text-center py-10 text-slate-500 italic">Aucun client à facturer pour cette semaine.</div>
         ) : (
           <>
             {PRODUCTS.map(prod => {
@@ -779,26 +778,36 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
               const clients = stats.sales.filter(s => rowCA(s) > 0);
               if (clients.length === 0) return null;
               const productTotal = clients.reduce((sum, c) => sum + rowCA(c), 0);
+              const productLeads = clients.reduce((sum, c) => sum + rowDays(c), 0);
+              const tone = prod.key === 'ITE' ? { bg: 'bg-cyan-50', border: 'border-cyan-300', subtle: 'text-cyan-700', strong: 'text-cyan-900' }
+                         : prod.key === 'PV'  ? { bg: 'bg-orange-50', border: 'border-orange-300', subtle: 'text-orange-700', strong: 'text-orange-900' }
+                         :                      { bg: 'bg-red-50', border: 'border-red-300', subtle: 'text-red-700', strong: 'text-red-900' };
               return (
-                <div key={prod.key} className="mb-2 pdf-section">
-                  <h2 className="text-[11px] font-bold text-slate-900 border-b border-slate-300 pb-0.5 mb-1 flex items-center justify-between">
-                    <span>{prod.icon} {prod.label}</span>
-                    <span className="text-[10px] font-normal text-slate-600">{fmtEur(productTotal)}</span>
-                  </h2>
-                  <table className="w-full border border-slate-300" style={{ fontSize: '9px' }}>
-                    <thead className="bg-slate-100">
-                      <tr>
-                        <th className="text-left px-2 py-1 border-b border-slate-300">Client</th>
-                        <th className="text-right px-2 py-1 border-b border-slate-300 w-16">Leads</th>
-                        <th className="text-right px-2 py-1 border-b border-slate-300 w-24">Montant</th>
+                <div key={prod.key} className={`mb-4 border ${tone.border} rounded-lg overflow-hidden pdf-section`}>
+                  <div className={`${tone.bg} px-4 py-2 flex items-center justify-between border-b ${tone.border}`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-base">{prod.icon}</span>
+                      <span className={`font-bold text-[13px] ${tone.strong}`}>{prod.label}</span>
+                      <span className={`text-[10px] ${tone.subtle}`}>· {productLeads} lead{productLeads > 1 ? 's' : ''}</span>
+                    </div>
+                    <span className={`font-bold text-[13px] ${tone.strong}`}>{fmtEur(productTotal)}</span>
+                  </div>
+                  <table className="w-full" style={{ fontSize: '11px' }}>
+                    <thead>
+                      <tr className="bg-slate-50 text-slate-600 text-[10px] uppercase tracking-wider">
+                        <th className="text-left px-3 py-2 font-semibold">Client</th>
+                        <th className="text-right px-3 py-2 font-semibold w-20">Leads</th>
+                        <th className="text-right px-3 py-2 font-semibold w-24">€ / lead</th>
+                        <th className="text-right px-3 py-2 font-semibold w-28">Montant</th>
                       </tr>
                     </thead>
                     <tbody>
                       {[...clients].sort((a, b) => a.position - b.position).map(c => (
-                        <tr key={c.id} className="border-b border-slate-200">
-                          <td className="px-2 py-1 font-medium">{c.client_name}</td>
-                          <td className="text-right px-2 py-1">{rowDays(c)}</td>
-                          <td className="text-right px-2 py-1 font-bold text-amber-700">{fmtEur(rowCA(c))}</td>
+                        <tr key={c.id} className="border-t border-slate-200">
+                          <td className="px-3 py-2 font-medium text-slate-800">{c.client_name}</td>
+                          <td className="text-right px-3 py-2 text-slate-700">{rowDays(c)}</td>
+                          <td className="text-right px-3 py-2 text-slate-700">{fmtEur(Number(c.price_per_lead) || 0)}</td>
+                          <td className="text-right px-3 py-2 font-bold text-slate-900">{fmtEur(rowCA(c))}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -807,14 +816,10 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
               );
             })}
 
-            <div className="mt-3 pt-2 border-t-2 border-amber-600 pdf-section">
-              <table className="w-full">
-                <tbody>
-                  <tr><td className="text-right px-2 py-0.5 text-slate-600 text-[9px]">Sous-total HT</td><td className="text-right px-2 py-0.5 w-32 font-bold text-[10px]">{fmtEur(totalAFacturer)}</td></tr>
-                  <tr className="text-[8px] text-slate-500"><td className="text-right px-2 py-0.5 italic">(TVA non incluse)</td><td></td></tr>
-                  <tr className="bg-amber-100 font-bold"><td className="text-right px-2 py-1.5 text-[11px]">TOTAL À FACTURER</td><td className="text-right px-2 py-1.5 text-amber-900 text-[12px]">{fmtEur(totalAFacturer)}</td></tr>
-                </tbody>
-              </table>
+            {/* Bandeau total final */}
+            <div className="mt-5 pt-3 border-t-2 border-slate-800 flex items-baseline justify-end gap-4 pdf-section">
+              <span className="text-[11px] uppercase tracking-wider text-slate-600 font-semibold">Total à facturer</span>
+              <span className="text-2xl font-bold text-amber-700">{fmtEur(totalAFacturer)}</span>
             </div>
           </>
         )}
