@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Euro, Target, BarChart3, History, CalendarDays, Search, LogOut, Loader2, AlertCircle, Key, X, Check, Cloud, CloudOff, FileText, Receipt, Printer } from 'lucide-react';
+import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Euro, Target, BarChart3, History, CalendarDays, Search, LogOut, Loader2, AlertCircle, Key, X, Check, Cloud, CloudOff, FileText, Receipt, Printer, Menu, RefreshCw } from 'lucide-react';
 
 const SUPABASE_URL = 'https://yxfanlgklvpdpsrzcoqy.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SA4vTbf1FfOH2YNHtw3LJg_geqlOxpV';
@@ -36,9 +36,10 @@ const api = {
   async login(username, password) {
     const data = await this._rpc('login_v2', { p_username: username.trim(), p_password: password, p_user_agent: navigator.userAgent.slice(0, 200) }, { silentSave: true });
     if (!data || data.length === 0) throw new Error('Identifiants incorrects');
-    const session = { token: data[0].token, user_id: data[0].user_id, username: data[0].username, display_name: data[0].display_name };
+    const session = { token: data[0].token, user_id: data[0].user_id, username: data[0].username, display_name: data[0].display_name, canWrite: data[0].username === 'sacha' };
     this.setSession(session); return session;
   },
+  canWrite() { return this._session?.canWrite === true; },
   async logout() { if (this._session?.token) { try { await this._rpc('logout_v2', { p_token: this._session.token }, { silentSave: true }); } catch (e) {} } this.setSession(null); },
   async getWeeks() { return this._rpc('get_my_weeks', { p_token: this._session.token }, { silentSave: true }); },
   async createWeek(startDate, endDate) { return this._rpc('create_week', { p_token: this._session.token, p_start_date: startDate, p_end_date: endDate || null }); },
@@ -224,7 +225,7 @@ function StatsLeads({ session }) {
   const toast = useToast();
   const [weeks, setWeeks] = useState(() => { try { const c = localStorage.getItem(CACHE_KEY); return c ? JSON.parse(c) : []; } catch (e) { return []; } });
   const [currentWeekId, setCurrentWeekId] = useState(null);
-  const [activeTab, setActiveTab] = useState('stats');
+  const [activeTab, setActiveTab] = useState('week');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showChangePwd, setShowChangePwd] = useState(false);
@@ -243,17 +244,44 @@ function StatsLeads({ session }) {
 
   useEffect(() => { try { if (weeks.length) localStorage.setItem(CACHE_KEY, JSON.stringify(weeks)); } catch (e) {} }, [weeks]);
 
+  const canWrite = session.canWrite === true;
+
   const loadWeeks = useCallback(async () => {
     try {
       const data = await api.getWeeks();
       setWeeks(data || []);
       if (data?.length > 0) { if (!currentWeekId || !data.find(w => w.id === currentWeekId)) setCurrentWeekId(data[0].id); }
-      else { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); }
+      else if (canWrite) { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); }
     } catch (e) { setError(e.message); toast(e.message, 'error'); }
     setLoading(false);
-  }, [currentWeekId, toast]);
+  }, [currentWeekId, toast, canWrite]);
 
   useEffect(() => { loadWeeks(); }, [session.user_id]); // eslint-disable-line
+
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastSync, setLastSync] = useState(null);
+  const refresh = useCallback(async (silent = false) => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      const data = await api.getWeeks();
+      setWeeks(data || []);
+      setLastSync(new Date());
+      if (!silent) toast('Données actualisées', 'success');
+    } catch (e) { if (!silent) toast(e.message, 'error'); }
+    setRefreshing(false);
+  }, [refreshing, toast]);
+
+  // Rafraîchit quand l'app revient au premier plan (téléphone) + toutes les 60 s pour les lecteurs
+  useEffect(() => {
+    const onVisible = () => { if (document.visibilityState === 'visible') refresh(true); };
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = !canWrite ? setInterval(() => { if (document.visibilityState === 'visible') refresh(true); }, 60000) : null;
+    return () => { document.removeEventListener('visibilitychange', onVisible); if (interval) clearInterval(interval); };
+  }, [refresh, canWrite]);
+
+  // Efface la bannière d'erreur automatiquement
+  useEffect(() => { if (!error) return; const t = setTimeout(() => setError(''), 8000); return () => clearTimeout(t); }, [error]);
 
   const currentWeek = useMemo(() => weeks.find(w => w.id === currentWeekId), [weeks, currentWeekId]);
   const calc = useMemo(() => currentWeek ? computeWeekStats(currentWeek) : null, [currentWeek]);
@@ -263,23 +291,35 @@ function StatsLeads({ session }) {
   const [newWeekModal, setNewWeekModal] = useState(null); // { mode: 'new'|'duplicate', defaultStart, defaultEnd }
 
   const optimistic = (mutator, serverCall) => {
+    if (!canWrite) return;
     setWeeks(mutator);
     serverCall().catch(e => { setError(e.message); toast(e.message, 'error'); loadWeeks(); });
   };
   const patchWeek = (weekId, patch) => optimistic(prev => prev.map(w => w.id === weekId ? { ...w, ...patch } : w), () => api.updateWeek(weekId, patch));
   const updateRow = (table, rowId, patch) => optimistic(prev => prev.map(w => ({ ...w, [table]: w[table]?.map(r => r.id === rowId ? { ...r, ...patch } : r) })), () => table === 'lead_sources' ? api.updateLeadSource(rowId, patch) : api.updateSale(rowId, patch));
-  const deleteRow = (table, rowId, weekId) => optimistic(prev => prev.map(w => w.id === weekId ? { ...w, [table]: w[table].filter(r => r.id !== rowId) } : w), () => table === 'lead_sources' ? api.deleteLeadSource(rowId) : api.deleteSale(rowId));
-  const addLeadSource = async (weekId, category) => { try { const row = await api.addLeadSource(weekId, category, 'Nouvelle source'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, lead_sources: [...(w.lead_sources || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
-  const addSaleRow = async (weekId, category) => { try { const row = await api.addSale(weekId, category, 'Nouveau client'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, sales: [...(w.sales || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
+  const deleteRow = (table, rowId, weekId) => {
+    if (!canWrite) return;
+    const week = weeks.find(w => w.id === weekId);
+    const row = week?.[table]?.find(r => r.id === rowId);
+    const name = row?.client_name || row?.source_name || 'cette ligne';
+    setConfirm({
+      title: `Supprimer « ${name} » ?`,
+      message: table === 'sales' ? 'Les leads saisis pour ce client cette semaine seront perdus.' : 'Le coût saisi pour cette source cette semaine sera perdu.',
+      danger: true, confirmText: 'Supprimer',
+      onConfirm: () => optimistic(prev => prev.map(w => w.id === weekId ? { ...w, [table]: w[table].filter(r => r.id !== rowId) } : w), () => table === 'lead_sources' ? api.deleteLeadSource(rowId) : api.deleteSale(rowId)),
+    });
+  };
+  const addLeadSource = async (weekId, category) => { if (!canWrite) return; try { const row = await api.addLeadSource(weekId, category, 'Nouvelle source'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, lead_sources: [...(w.lead_sources || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
+  const addSaleRow = async (weekId, category) => { if (!canWrite) return; try { const row = await api.addSale(weekId, category, 'Nouveau client'); setWeeks(prev => prev.map(w => w.id === weekId ? { ...w, sales: [...(w.sales || []), row] } : w)); } catch (e) { setError(e.message); toast(e.message, 'error'); } };
 
   const openNewWeekModal = () => {
-    if (!currentWeek) return;
+    if (!canWrite || !currentWeek) return;
     const defaultStart = addDays(currentWeek.start_date, 7);
     const defaultEnd = addDays(defaultStart, 7);
     setNewWeekModal({ mode: 'new', defaultStart, defaultEnd });
   };
   const openDuplicateModal = () => {
-    if (!currentWeek) return;
+    if (!canWrite || !currentWeek) return;
     const defaultStart = addDays(currentWeek.start_date, 7);
     const defaultEnd = addDays(defaultStart, 7);
     setNewWeekModal({ mode: 'duplicate', defaultStart, defaultEnd });
@@ -304,9 +344,11 @@ function StatsLeads({ session }) {
   };
 
   const changeWeekDate = async (weekId, patch) => {
+    if (!canWrite) return;
     try { await api.updateWeek(weekId, patch); const fresh = await api.getWeeks(); setWeeks(fresh || []); toast('Date modifiée', 'success'); } catch (e) { setError(e.message); toast(e.message, 'error'); }
   };
   const deleteWeek = (weekId) => {
+    if (!canWrite) return;
     setConfirm({ title: 'Supprimer cette semaine ?', message: 'Cette action est définitive.', danger: true, confirmText: 'Supprimer',
       onConfirm: async () => { try { await api.deleteWeek(weekId); const newWeeks = weeks.filter(w => w.id !== weekId); setWeeks(newWeeks); if (currentWeekId === weekId) { if (newWeeks.length > 0) setCurrentWeekId(newWeeks[0].id); else { const w = await api.createWeek(getCurrentMonday()); const fresh = await api.getWeeks(); setWeeks(fresh || []); setCurrentWeekId(w.id); } } toast('Semaine supprimée', 'success'); } catch (e) { setError(e.message); toast(e.message, 'error'); } }
     });
@@ -324,7 +366,12 @@ function StatsLeads({ session }) {
   }); // eslint-disable-line
 
   if (loading && weeks.length === 0) return <div className="min-h-screen bg-slate-950 flex items-center justify-center"><Loader2 className="text-cyan-400 animate-spin" size={32} /></div>;
-  if (!currentWeek || !calc) return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400"><div>Initialisation...</div></div>;
+  if (!currentWeek || !calc) return (
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-slate-400 gap-4 p-6 text-center">
+      <div>{canWrite ? 'Initialisation...' : "Aucune donnée disponible pour le moment."}</div>
+      {!canWrite && <button onClick={() => api.logout()} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm border border-slate-700 flex items-center gap-2"><LogOut size={15} /> Déconnexion</button>}
+    </div>
+  );
   const range = getWeekRange(currentWeek);
 
   return (
@@ -342,31 +389,40 @@ function StatsLeads({ session }) {
               <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/20"><BarChart3 size={20} className="text-white" /></div>
               <div>
                 <h1 className="font-bold text-base leading-tight flex items-center gap-2">Stats Leads<SaveBadge status={saveStatus} online={online} /></h1>
-                <div className="text-xs text-slate-400">Connecté : <span className="text-cyan-300 font-medium">{session.display_name}</span></div>
+                <div className="text-xs text-slate-400">
+                  Connecté : <span className="text-cyan-300 font-medium">{session.display_name}</span>
+                  {!canWrite && <span className="ml-2 px-1.5 py-0.5 rounded bg-amber-900/40 border border-amber-700/40 text-amber-300 text-[10px] uppercase tracking-wide">Lecture seule</span>}
+                </div>
               </div>
             </div>
             <div className="md:hidden relative">
-              <button onClick={() => setShowMenu(!showMenu)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700"><BarChart3 size={16} /></button>
+              <button onClick={() => setShowMenu(!showMenu)} className="p-2 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700" aria-label="Menu"><Menu size={16} /></button>
               {showMenu && (
-                <div className="absolute right-0 top-full mt-2 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 min-w-[200px] z-30">
-                  <button onClick={() => { setPdfMode('week'); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><FileText size={14} /> PDF semaine</button>
-                  <button onClick={() => { setPdfMode('invoice'); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Receipt size={14} /> À facturer</button>
-                  <div className="border-t border-slate-800 my-1"></div>
-                  <button onClick={() => { exportJSON(); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Download size={14} /> Export JSON</button>
-                  <button onClick={() => { setShowChangePwd(true); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Key size={14} /> Mot de passe</button>
-                  <div className="border-t border-slate-800 my-1"></div>
-                  <button onClick={() => api.logout()} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2 text-rose-300"><LogOut size={14} /> Déconnexion</button>
-                </div>
+                <>
+                  <div className="fixed inset-0 z-20" onClick={() => setShowMenu(false)}></div>
+                  <div className="absolute right-0 top-full mt-2 bg-slate-900 border border-slate-700 rounded-lg shadow-xl py-1 min-w-[200px] z-30">
+                    <button onClick={() => { refresh(); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><RefreshCw size={14} /> Actualiser</button>
+                    <div className="border-t border-slate-800 my-1"></div>
+                    <button onClick={() => { setPdfMode('week'); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><FileText size={14} /> PDF semaine</button>
+                    <button onClick={() => { setPdfMode('invoice'); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Receipt size={14} /> À facturer</button>
+                    <div className="border-t border-slate-800 my-1"></div>
+                    <button onClick={() => { exportJSON(); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Download size={14} /> Export JSON</button>
+                    <button onClick={() => { setShowChangePwd(true); setShowMenu(false); }} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2"><Key size={14} /> Mot de passe</button>
+                    <div className="border-t border-slate-800 my-1"></div>
+                    <button onClick={() => api.logout()} className="w-full px-4 py-2 text-sm text-left hover:bg-slate-800 flex items-center gap-2 text-rose-300"><LogOut size={14} /> Déconnexion</button>
+                  </div>
+                </>
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl p-1">
+          <div className="hidden md:flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl p-1">
             <TabButton active={activeTab === 'week'} onClick={() => setActiveTab('week')} icon={<Calendar size={15} />}>Semaine</TabButton>
             <TabButton active={activeTab === 'stats'} onClick={() => setActiveTab('stats')} icon={<BarChart3 size={15} />}>Stats</TabButton>
             <TabButton active={activeTab === 'history'} onClick={() => setActiveTab('history')} icon={<History size={15} />}>Historique</TabButton>
             <TabButton active={activeTab === 'monthly'} onClick={() => setActiveTab('monthly')} icon={<CalendarDays size={15} />}>Mensuel</TabButton>
           </div>
           <div className="hidden md:flex items-center gap-2">
+            <button onClick={() => refresh()} disabled={refreshing} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700" title={lastSync ? `Dernière maj ${lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : 'Actualiser'}><RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} /></button>
             <button onClick={() => setPdfMode('week')} className="px-3 py-2 bg-emerald-700 hover:bg-emerald-600 rounded-lg flex items-center gap-1.5 text-sm font-medium" title="PDF Semaine (Ctrl+P)"><FileText size={15} /> PDF</button>
             <button onClick={() => setPdfMode('invoice')} className="px-3 py-2 bg-amber-700 hover:bg-amber-600 rounded-lg flex items-center gap-1.5 text-sm font-medium" title="À facturer"><Receipt size={15} /> Factures</button>
             <button onClick={exportJSON} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg flex items-center gap-1.5 text-sm border border-slate-700"><Download size={15} /></button>
@@ -377,14 +433,35 @@ function StatsLeads({ session }) {
         {error && (<div className="bg-rose-900/30 border-t border-rose-800/50 px-4 py-2 text-sm text-rose-300 flex items-center gap-2"><AlertCircle size={14} /> {error}<button onClick={() => setError('')} className="ml-auto text-xs hover:text-rose-100">×</button></div>)}
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        {activeTab === 'week' && <WeekView currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={openDuplicateModal} newWeek={openNewWeekModal} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSaleRow} />}
-        {activeTab === 'stats' && <StatsView weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} />}
-        {activeTab === 'history' && <HistoryView weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} deleteWeek={deleteWeek} />}
+      <div className="max-w-7xl mx-auto px-3 md:px-4 py-4 md:py-6 pb-24 md:pb-6">
+        {activeTab === 'week' && <WeekView canWrite={canWrite} currentWeek={currentWeek} calc={calc} range={range} sortedWeekIds={sortedWeekIds} currentIdx={currentIdx} setCurrentWeekId={setCurrentWeekId} duplicateWeek={openDuplicateModal} newWeek={openNewWeekModal} changeWeekDate={changeWeekDate} patchWeek={patchWeek} updateRow={updateRow} deleteRow={deleteRow} addLeadSource={addLeadSource} addSale={addSaleRow} />}
+        {activeTab === 'stats' && <StatsView weeks={weeks} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} />}
+        {activeTab === 'history' && <HistoryView canWrite={canWrite} weeks={weeks} currentWeekId={currentWeekId} setCurrentWeekId={setCurrentWeekId} setActiveTab={setActiveTab} deleteWeek={deleteWeek} />}
         {activeTab === 'monthly' && <MonthlyView weeks={weeks} />}
       </div>
 
-      <div className="text-center text-xs text-slate-500 py-6">{weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Sécurisé par token • <span className="hidden md:inline">Ctrl+N (nouvelle), Ctrl+D (dupliquer), Ctrl+P (PDF)</span></div>
+      <div className="text-center text-xs text-slate-500 py-6 pb-24 md:pb-6">{weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Sécurisé par token{lastSync && <> • maj {lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</>} • <span className="hidden md:inline">Ctrl+N (nouvelle), Ctrl+D (dupliquer), Ctrl+P (PDF)</span></div>
+
+      {/* Barre de navigation mobile (bas d'écran) */}
+      <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+        <div className="grid grid-cols-4">
+          {[
+            { key: 'week', label: 'Semaine', icon: <Calendar size={20} /> },
+            { key: 'stats', label: 'Stats', icon: <BarChart3 size={20} /> },
+            { key: 'history', label: 'Historique', icon: <History size={20} /> },
+            { key: 'monthly', label: 'Mensuel', icon: <CalendarDays size={20} /> },
+          ].map(t => {
+            const active = activeTab === t.key;
+            return (
+              <button key={t.key} onClick={() => { setActiveTab(t.key); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
+                className={`flex flex-col items-center justify-center gap-0.5 py-2.5 text-[11px] font-medium transition ${active ? 'text-cyan-300' : 'text-slate-500'}`}>
+                <span className={`p-1.5 rounded-xl transition ${active ? 'bg-gradient-to-br from-cyan-600/40 to-violet-600/40' : ''}`}>{t.icon}</span>
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }
@@ -401,15 +478,24 @@ function TabButton({ active, onClick, children, icon }) {
   return <button onClick={onClick} className={`px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-sm font-medium transition-all ${active ? 'bg-gradient-to-br from-cyan-600 to-violet-600 text-white shadow-lg shadow-cyan-500/20' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'}`}>{icon}<span className="hidden sm:inline">{children}</span></button>;
 }
 
-function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurrentWeekId, duplicateWeek, newWeek, changeWeekDate, patchWeek, updateRow, deleteRow, addLeadSource, addSale }) {
+function WeekView({ canWrite = true, currentWeek, calc, range, sortedWeekIds, currentIdx, setCurrentWeekId, duplicateWeek, newWeek, changeWeekDate, patchWeek, updateRow, deleteRow, addLeadSource, addSale }) {
   const [editingDate, setEditingDate] = useState(false);
+  const [mobileProduct, setMobileProduct] = useState(null); // filtre produit (mobile) : null = tous
+  // Index du jour actuel (0 = lundi) si la semaine affichée contient aujourd'hui, sinon -1
+  const todayIdx = useMemo(() => {
+    const today = toIsoDate(new Date());
+    const end = currentWeek.end_date || addDays(currentWeek.start_date, 7);
+    if (today < currentWeek.start_date || today > end) return -1;
+    const d = new Date().getDay();
+    return d === 0 ? 6 : d - 1;
+  }, [currentWeek.start_date, currentWeek.end_date]);
   return (
     <div className="space-y-5">
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800/50 to-slate-900 rounded-2xl border border-slate-700/50 p-5 shadow-2xl">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800/50 to-slate-900 rounded-2xl border border-slate-700/50 p-4 md:p-5 shadow-2xl">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <div className="text-xs uppercase tracking-widest text-cyan-400 mb-1 flex items-center gap-2"><Calendar size={14} /> Semaine en cours</div>
-            {editingDate ? (
+            {editingDate && canWrite ? (
               <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                 <div className="flex items-center gap-2">
                   <span className="text-sm text-slate-400">Du</span>
@@ -426,17 +512,19 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
                 <button onClick={() => setEditingDate(false)} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium">OK</button>
               </div>
             ) : (
-              <h2 className="text-xl md:text-3xl font-bold cursor-pointer hover:text-cyan-300 transition" onClick={() => setEditingDate(true)} title="Cliquer pour modifier les dates">
+              <h2 className={`text-xl md:text-3xl font-bold transition ${canWrite ? 'cursor-pointer hover:text-cyan-300' : ''}`} onClick={() => canWrite && setEditingDate(true)} title={canWrite ? 'Cliquer pour modifier les dates' : ''}>
                 Du <span className="text-cyan-300">{range.start}</span> au <span className="text-violet-300">{range.end}</span>
-                <span className="text-xs text-slate-500 ml-2 font-normal">(modifier)</span>
+                {canWrite && <span className="text-xs text-slate-500 ml-2 font-normal">(modifier)</span>}
               </h2>
             )}
           </div>
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => currentIdx < sortedWeekIds.length - 1 && setCurrentWeekId(sortedWeekIds[currentIdx + 1])} disabled={currentIdx >= sortedWeekIds.length - 1} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700"><ChevronLeft size={16} /> Préc.</button>
-            <button onClick={() => currentIdx > 0 && setCurrentWeekId(sortedWeekIds[currentIdx - 1])} disabled={currentIdx <= 0} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700">Suiv. <ChevronRight size={16} /></button>
-            <button onClick={duplicateWeek} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-indigo-500/20"><Copy size={16} /> Dupliquer</button>
-            <button onClick={newWeek} className="px-3 py-2 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-cyan-500/20"><Plus size={16} /> Nouvelle</button>
+            <button onClick={() => currentIdx < sortedWeekIds.length - 1 && setCurrentWeekId(sortedWeekIds[currentIdx + 1])} disabled={currentIdx >= sortedWeekIds.length - 1} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700"><ChevronLeft size={16} /><span className="hidden sm:inline">Préc.</span></button>
+            <button onClick={() => currentIdx > 0 && setCurrentWeekId(sortedWeekIds[currentIdx - 1])} disabled={currentIdx <= 0} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-30 rounded-lg flex items-center gap-1 text-sm border border-slate-700"><span className="hidden sm:inline">Suiv.</span><ChevronRight size={16} /></button>
+            {canWrite && <>
+              <button onClick={duplicateWeek} className="px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-indigo-500/20"><Copy size={16} /> Dupliquer</button>
+              <button onClick={newWeek} className="px-3 py-2 bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 rounded-lg flex items-center gap-1 text-sm font-medium shadow-lg shadow-cyan-500/20"><Plus size={16} /> Nouvelle</button>
+            </>}
           </div>
         </div>
       </div>
@@ -448,16 +536,49 @@ function WeekView({ currentWeek, calc, range, sortedWeekIds, currentIdx, setCurr
         <KPI icon={<BarChart3 size={18} />} label="Marge %" value={fmtPct(calc.totalMargePct)} color={calc.totalMargePct >= 0 ? 'emerald' : 'rose'} />
       </div>
 
+      {/* Mobile : résumé par produit + filtre */}
+      <div className="md:hidden space-y-3">
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {[{ key: null, label: 'Tous' }, ...PRODUCTS.map(p => ({ key: p.key, label: `${p.icon} ${p.label}` }))].map(c => (
+            <button key={c.key || 'all'} onClick={() => setMobileProduct(c.key)}
+              className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-medium border transition ${mobileProduct === c.key ? 'bg-gradient-to-r from-cyan-600 to-violet-600 border-transparent text-white' : 'bg-slate-900 border-slate-700 text-slate-300'}`}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+        {mobileProduct === null && (
+          <div className="grid grid-cols-1 gap-2">
+            {PRODUCTS.map(prod => {
+              const s = calc[prod.key.toLowerCase()];
+              const ring = { cyan: 'border-cyan-700/50', orange: 'border-orange-700/50', red: 'border-red-700/50' }[prod.color];
+              return (
+                <button key={prod.key} onClick={() => setMobileProduct(prod.key)} className={`w-full text-left bg-slate-900/70 rounded-xl border ${ring} px-3 py-2.5 active:scale-[0.99] transition`}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span className="font-bold text-sm">{prod.icon} {prod.label}</span>
+                    <span className={`text-sm font-bold ${margeColor(s.marge)}`}>{s.marge >= 0 ? '+' : ''}{fmtEurShort(s.marge)} <span className="text-[10px] font-normal opacity-70">({fmtPct(s.margePct)})</span></span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-[11px]">
+                    <div><div className="text-slate-500">Leads vendus</div><div className="text-violet-300 font-semibold">{s.salesLeads}</div></div>
+                    <div><div className="text-slate-500">CA</div><div className="text-cyan-300 font-semibold">{fmtEurShort(s.ca)}</div></div>
+                    <div><div className="text-slate-500">Coût</div><div className="text-amber-300 font-semibold">{fmtEurShort(s.cost)}</div></div>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {/* 3 produits : ITE / PV / PAC */}
-      {PRODUCTS.map(prod => {
+      {PRODUCTS.filter(p => !mobileProduct || p.key === mobileProduct).map(prod => {
         const stats = calc[prod.key.toLowerCase()];
         return (
           <div key={prod.key} className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             <Card title={`${prod.label} — Leads`} accent={prod.color} icon={prod.icon}>
-              <LeadTable rows={stats.leads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, prod.key)} totalCost={stats.cost} totalLeads={stats.leadsCount} cm={stats.cm} accent={prod.color} />
+              <LeadTable canWrite={canWrite} rows={stats.leads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, prod.key)} totalCost={stats.cost} totalLeads={stats.leadsCount} cm={stats.cm} accent={prod.color} />
             </Card>
             <Card title={`${prod.label} — Ventes`} accent="emerald" icon="💰">
-              <SalesTable rows={stats.sales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, prod.key)} totalCA={stats.ca} prodCost={stats.cost} marge={stats.marge} margePct={stats.margePct} />
+              <SalesTable canWrite={canWrite} todayIdx={todayIdx} rows={stats.sales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, prod.key)} totalCA={stats.ca} prodCost={stats.cost} marge={stats.marge} margePct={stats.margePct} />
             </Card>
           </div>
         );
@@ -560,9 +681,9 @@ function NewWeekModal({ mode, defaultStart, defaultEnd, onClose, onConfirm }) {
           )}
 
           <div className="flex gap-2 justify-end">
-            <button onClick={() => { setStartDate(defaultStart); setEndDate(addDays(defaultStart, 7)); }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">Reset (+7 jours)</button>
-            <button onClick={() => { setStartDate(defaultStart); setEndDate(addDays(defaultStart, 13)); }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">2 semaines</button>
-            <button onClick={() => { const d = new Date(defaultStart); const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0); setEndDate(toIsoDate(lastDay)); }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">Fin du mois</button>
+            <button onClick={() => setEndDate(addDays(startDate, 7))} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">+7 jours</button>
+            <button onClick={() => setEndDate(addDays(startDate, 13))} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">2 semaines</button>
+            <button onClick={() => { const d = new Date(startDate); const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0); setEndDate(toIsoDate(lastDay)); }} className="px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-xs">Fin du mois</button>
           </div>
 
           {error && <div className="bg-rose-900/30 border border-rose-800/50 rounded-lg px-3 py-2 text-sm text-rose-300">{error}</div>}
@@ -746,68 +867,59 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
           <button onClick={onClose} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm">Fermer</button>
         </div>
       </div>
-      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-8 shadow-2xl" style={{ fontSize: '11px', lineHeight: '1.4' }}>
-        {/* Header */}
-        <div className="flex justify-between items-end pb-3 mb-5 border-b-2 border-slate-800">
+      <div className="pdf-page bg-white text-slate-900 max-w-[210mm] mx-auto my-4 p-6 shadow-2xl" style={{ fontSize: '10px', lineHeight: '1.3' }}>
+        <div className="flex justify-between items-end border-b-2 border-amber-600 pb-2 mb-3">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900 leading-tight">À facturer</h1>
-            <p className="text-[11px] text-slate-600 mt-0.5">Semaine du {range.start} au {range.end}</p>
+            <span className="bg-amber-100 text-amber-800 px-2 py-0.5 rounded text-[8px] uppercase tracking-wider font-bold">État à facturer</span>
+            <h1 className="text-xl font-bold text-slate-900 mt-1 leading-tight">Récapitulatif de facturation</h1>
+            <p className="text-[10px] text-slate-600">Semaine du {range.start} au {range.end}</p>
           </div>
-          <div className="text-right text-[10px] text-slate-500">
-            <div className="font-semibold text-slate-800">{session.display_name}</div>
-            <div>Édité le {new Date().toLocaleDateString('fr-FR')}</div>
+          <div className="text-right text-[9px]">
+            <div className="font-bold text-slate-900">{session.display_name}</div>
+            <div className="text-slate-500">Édité le {new Date().toLocaleDateString('fr-FR')}</div>
           </div>
         </div>
 
-        {/* Bloc total */}
-        <div className="bg-amber-50 border border-amber-300 rounded-lg px-5 py-4 mb-5 pdf-section flex items-center justify-between">
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">Montant total à facturer</div>
-            <div className="text-3xl font-bold text-amber-900 leading-tight mt-0.5">{fmtEur(totalAFacturer)}</div>
-            <div className="text-[10px] text-amber-700 mt-0.5">{allClients.length} client{allClients.length > 1 ? 's' : ''} • {allClients.reduce((s, c) => s + c._leads, 0)} leads vendus</div>
+        <div className="bg-amber-50 border-2 border-amber-300 rounded p-3 mb-3 pdf-section">
+          <div className="flex justify-between items-center">
+            <div>
+              <div className="text-[9px] uppercase tracking-wider text-amber-800 font-bold">Total à réclamer</div>
+              <div className="text-2xl font-bold text-amber-900">{fmtEur(totalAFacturer)}</div>
+              <div className="text-[9px] text-amber-700">{allClients.length} client{allClients.length > 1 ? 's' : ''} • {calc.totalSalesLeads} leads vendus</div>
+            </div>
+            <Receipt size={36} className="text-amber-300" />
           </div>
-          <Receipt size={40} className="text-amber-400" />
         </div>
 
         {allClients.length === 0 ? (
-          <div className="text-center py-10 text-slate-500 italic">Aucun client à facturer pour cette semaine.</div>
+          <div className="text-center py-8 text-slate-500 italic text-[10px]">Aucun client à facturer pour cette semaine.</div>
         ) : (
           <>
             {PRODUCTS.map(prod => {
               const stats = calc[prod.key.toLowerCase()];
-              const clients = stats.sales.filter(s => rowCA(s) > 0);
+              const clients = stats.sales.filter(s => Number(s.ca) > 0);
               if (clients.length === 0) return null;
-              const productTotal = clients.reduce((sum, c) => sum + rowCA(c), 0);
-              const productLeads = clients.reduce((sum, c) => sum + rowDays(c), 0);
-              const tone = prod.key === 'ITE' ? { bg: 'bg-cyan-50', border: 'border-cyan-300', subtle: 'text-cyan-700', strong: 'text-cyan-900' }
-                         : prod.key === 'PV'  ? { bg: 'bg-orange-50', border: 'border-orange-300', subtle: 'text-orange-700', strong: 'text-orange-900' }
-                         :                      { bg: 'bg-red-50', border: 'border-red-300', subtle: 'text-red-700', strong: 'text-red-900' };
+              const productTotal = clients.reduce((sum, c) => sum + Number(c.ca || 0), 0);
               return (
-                <div key={prod.key} className={`mb-4 border ${tone.border} rounded-lg overflow-hidden pdf-section`}>
-                  <div className={`${tone.bg} px-4 py-2 flex items-center justify-between border-b ${tone.border}`}>
-                    <div className="flex items-center gap-2">
-                      <span className="text-base">{prod.icon}</span>
-                      <span className={`font-bold text-[13px] ${tone.strong}`}>{prod.label}</span>
-                      <span className={`text-[10px] ${tone.subtle}`}>· {productLeads} lead{productLeads > 1 ? 's' : ''}</span>
-                    </div>
-                    <span className={`font-bold text-[13px] ${tone.strong}`}>{fmtEur(productTotal)}</span>
-                  </div>
-                  <table className="w-full" style={{ fontSize: '11px' }}>
-                    <thead>
-                      <tr className="bg-slate-50 text-slate-600 text-[10px] uppercase tracking-wider">
-                        <th className="text-left px-3 py-2 font-semibold">Client</th>
-                        <th className="text-right px-3 py-2 font-semibold w-20">Leads</th>
-                        <th className="text-right px-3 py-2 font-semibold w-24">€ / lead</th>
-                        <th className="text-right px-3 py-2 font-semibold w-28">Montant</th>
+                <div key={prod.key} className="mb-2 pdf-section">
+                  <h2 className="text-[11px] font-bold text-slate-900 border-b border-slate-300 pb-0.5 mb-1 flex items-center justify-between">
+                    <span>{prod.icon} {prod.label}</span>
+                    <span className="text-[10px] font-normal text-slate-600">{fmtEur(productTotal)}</span>
+                  </h2>
+                  <table className="w-full border border-slate-300" style={{ fontSize: '9px' }}>
+                    <thead className="bg-slate-100">
+                      <tr>
+                        <th className="text-left px-2 py-1 border-b border-slate-300">Client</th>
+                        <th className="text-right px-2 py-1 border-b border-slate-300 w-16">Leads</th>
+                        <th className="text-right px-2 py-1 border-b border-slate-300 w-24">Montant</th>
                       </tr>
                     </thead>
                     <tbody>
                       {[...clients].sort((a, b) => a.position - b.position).map(c => (
-                        <tr key={c.id} className="border-t border-slate-200">
-                          <td className="px-3 py-2 font-medium text-slate-800">{c.client_name}</td>
-                          <td className="text-right px-3 py-2 text-slate-700">{rowDays(c)}</td>
-                          <td className="text-right px-3 py-2 text-slate-700">{fmtEur(Number(c.price_per_lead) || 0)}</td>
-                          <td className="text-right px-3 py-2 font-bold text-slate-900">{fmtEur(rowCA(c))}</td>
+                        <tr key={c.id} className="border-b border-slate-200">
+                          <td className="px-2 py-1 font-medium">{c.client_name}</td>
+                          <td className="text-right px-2 py-1">{c.leads}</td>
+                          <td className="text-right px-2 py-1 font-bold text-amber-700">{fmtEur(c.ca)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -816,10 +928,14 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
               );
             })}
 
-            {/* Bandeau total final */}
-            <div className="mt-5 pt-3 border-t-2 border-slate-800 flex items-baseline justify-end gap-4 pdf-section">
-              <span className="text-[11px] uppercase tracking-wider text-slate-600 font-semibold">Total à facturer</span>
-              <span className="text-2xl font-bold text-amber-700">{fmtEur(totalAFacturer)}</span>
+            <div className="mt-3 pt-2 border-t-2 border-amber-600 pdf-section">
+              <table className="w-full">
+                <tbody>
+                  <tr><td className="text-right px-2 py-0.5 text-slate-600 text-[9px]">Sous-total HT</td><td className="text-right px-2 py-0.5 w-32 font-bold text-[10px]">{fmtEur(totalAFacturer)}</td></tr>
+                  <tr className="text-[8px] text-slate-500"><td className="text-right px-2 py-0.5 italic">(TVA non incluse)</td><td></td></tr>
+                  <tr className="bg-amber-100 font-bold"><td className="text-right px-2 py-1.5 text-[11px]">TOTAL À FACTURER</td><td className="text-right px-2 py-1.5 text-amber-900 text-[12px]">{fmtEur(totalAFacturer)}</td></tr>
+                </tbody>
+              </table>
             </div>
           </>
         )}
@@ -829,7 +945,7 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
 }
 
 // ============== STATS VIEW (style SuperHote) ==============
-function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
+function StatsView({ weeks, setCurrentWeekId, setActiveTab }) {
   const [period, setPeriod] = useState('week'); // 'week' | 'month' | 'year'
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
 
@@ -921,51 +1037,6 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
   }), { ca: 0, cost: 0, marge: 0, leads: 0, count: 0 }), [rows]);
   const totalMargePct = totals.cost > 0 ? (totals.marge / totals.cost) * 100 : 0;
 
-  // Comparaison avec l'année précédente (pastilles de tendance des KPI)
-  const prevTotals = useMemo(() => {
-    if (period === 'year') return null;
-    const ws = allWeeksWithStats.filter(w => w.year === selectedYear - 1);
-    if (ws.length === 0) return null;
-    return ws.reduce((a, w) => ({ ca: a.ca + w.stats.totalCA, cost: a.cost + w.stats.totalCost, marge: a.marge + w.stats.totalMarge, leads: a.leads + w.stats.totalSalesLeads }), { ca: 0, cost: 0, marge: 0, leads: 0 });
-  }, [period, allWeeksWithStats, selectedYear]);
-  const variation = (cur, prev) => (prev === null || prev === undefined || prev === 0) ? null : ((cur - prev) / Math.abs(prev)) * 100;
-
-  // Variation de chaque ligne vs la précédente (ordre chronologique)
-  const rowsWithTrend = useMemo(() => {
-    const chrono = period === 'year' ? [...rows].reverse() : rows;
-    const prevById = {};
-    for (let i = 1; i < chrono.length; i++) prevById[chrono[i].id] = chrono[i - 1];
-    return rows.map(r => {
-      const prev = prevById[r.id];
-      const margeVar = (prev && !r.empty && !prev.empty && prev.marge !== 0) ? ((r.marge - prev.marge) / Math.abs(prev.marge)) * 100 : null;
-      return { ...r, margeVar };
-    });
-  }, [rows, period]);
-  const maxCA = useMemo(() => Math.max(1, ...rows.map(r => r.ca)), [rows]);
-
-  // Mini-courbe de la marge (ordre chronologique)
-  const sparkPoints = useMemo(() => {
-    const chrono = (period === 'year' ? [...rows].reverse() : rows).filter(r => !r.empty);
-    if (chrono.length < 2) return '';
-    const vals = chrono.map(r => r.marge);
-    const min = Math.min(...vals), max = Math.max(...vals), range = max - min || 1;
-    const W = 120, H = 28, pad = 3;
-    return chrono.map((r, i) => {
-      const x = pad + (i * (W - 2 * pad)) / (chrono.length - 1);
-      const y = pad + (1 - (r.marge - min) / range) * (H - 2 * pad);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(' ');
-  }, [rows, period]);
-
-  // Couleur "heatmap" de la marge %
-  const heatPill = (pct) => {
-    if (pct >= 35) return 'bg-emerald-500/25 text-emerald-200 ring-1 ring-emerald-500/30';
-    if (pct >= 15) return 'bg-emerald-500/15 text-emerald-300';
-    if (pct >= 0) return 'bg-slate-600/30 text-slate-300';
-    if (pct >= -15) return 'bg-rose-500/15 text-rose-300';
-    return 'bg-rose-500/25 text-rose-200 ring-1 ring-rose-500/30';
-  };
-
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -996,26 +1067,20 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
 
       {/* KPIs totaux */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <KPIBig icon={<Euro size={18} />} label="CA Total" value={fmtEur(totals.ca)} variation={variation(totals.ca, prevTotals?.ca)} color="cyan" />
-        <KPIBig icon={<Target size={18} />} label="Coût Total" value={fmtEur(totals.cost)} variation={variation(totals.cost, prevTotals?.cost)} color="amber" inverseColor />
-        <KPIBig icon={totals.marge >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />} label="Marge" value={fmtEur(totals.marge)} variation={variation(totals.marge, prevTotals?.marge)} color={totals.marge >= 0 ? 'emerald' : 'rose'} />
-        <KPIBig icon={<BarChart3 size={18} />} label="Leads vendus" value={totals.leads.toLocaleString('fr-FR')} variation={variation(totals.leads, prevTotals?.leads)} color="violet" />
+        <KPI icon={<Euro size={18} />} label="CA Total" value={fmtEur(totals.ca)} color="cyan" />
+        <KPI icon={<Target size={18} />} label="Coût Total" value={fmtEur(totals.cost)} color="amber" />
+        <KPI icon={totals.marge >= 0 ? <TrendingUp size={18} /> : <TrendingDown size={18} />} label="Marge" value={fmtEur(totals.marge)} color={totals.marge >= 0 ? 'emerald' : 'rose'} />
+        <KPI icon={<BarChart3 size={18} />} label="Leads vendus" value={totals.leads.toLocaleString('fr-FR')} color="violet" />
       </div>
 
       {/* Tableau récap */}
       <div className="bg-slate-900/50 rounded-2xl border border-slate-700/50 overflow-hidden shadow-xl">
-        <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-5 py-3 border-b border-slate-700/50 flex items-center justify-between gap-3">
+        <div className="bg-gradient-to-r from-slate-800 to-slate-900 px-5 py-3 border-b border-slate-700/50">
           <h3 className="text-lg font-bold text-cyan-300">
             {period === 'week' && `Semaines de ${selectedYear}`}
             {period === 'month' && `Mois de ${selectedYear}`}
             {period === 'year' && 'Toutes les années'}
           </h3>
-          {sparkPoints && (
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="text-[10px] uppercase tracking-wider text-slate-500 hidden sm:inline">Tendance marge</span>
-              <svg viewBox="0 0 120 28" width="110" height="26"><polyline points={sparkPoints} fill="none" stroke="#34d399" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" /></svg>
-            </div>
-          )}
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -1035,37 +1100,18 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
               {rows.length === 0 && (
                 <tr><td colSpan={6} className="text-center py-8 text-slate-500 italic">Aucune donnée pour cette période</td></tr>
               )}
-              {rowsWithTrend.map((r, i) => {
+              {rows.map((r, i) => {
                 const isEmpty = r.empty;
                 const clickable = period === 'week' && r.weekId;
-                const isCurrent = period === 'week' && r.weekId === currentWeekId;
-                const hasData = !isEmpty && (r.ca > 0 || r.cost > 0);
                 return (
                   <tr key={r.id}
                     onClick={() => clickable && (setCurrentWeekId(r.weekId), setActiveTab('week'))}
-                    className={`border-b border-slate-800/50 transition ${clickable ? 'cursor-pointer hover:bg-slate-800/40' : ''} ${isEmpty ? 'opacity-40' : ''} ${isCurrent ? 'bg-cyan-500/10 ring-1 ring-inset ring-cyan-400/40' : ''}`}>
-                    <td className="py-3 px-4 font-medium text-slate-200">
-                      <span className="flex items-center gap-2">
-                        {r.label}
-                        {isCurrent && <span className="text-[10px] uppercase tracking-wide bg-cyan-500/20 text-cyan-300 px-1.5 py-0.5 rounded">En cours</span>}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="flex items-center justify-end gap-2">
-                        <div className="hidden sm:block h-1.5 rounded-full bg-cyan-500/40" style={{ width: `${Math.round((r.ca / maxCA) * 56)}px` }}></div>
-                        <span className={r.ca > 0 ? 'text-cyan-300 font-medium' : 'text-slate-500'}>{fmtEur(r.ca)}</span>
-                      </div>
-                    </td>
+                    className={`border-b border-slate-800/50 transition ${clickable ? 'cursor-pointer hover:bg-slate-800/40' : ''} ${isEmpty ? 'opacity-40' : ''}`}>
+                    <td className="py-3 px-4 font-medium text-slate-200">{r.label}</td>
+                    <td className={`py-3 px-4 text-right ${r.ca > 0 ? 'text-cyan-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.ca)}</td>
                     <td className={`py-3 px-4 text-right ${r.cost > 0 ? 'text-amber-300 font-medium' : 'text-slate-500'}`}>{fmtEur(r.cost)}</td>
-                    <td className="py-3 px-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <span className={`font-medium ${r.marge !== 0 ? margeColor(r.marge) : 'text-slate-500'}`}>{fmtEur(r.marge)}</span>
-                        {r.margeVar !== null && <span className={`text-[10px] font-medium ${r.margeVar >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{r.margeVar >= 0 ? '▲' : '▼'}{Math.abs(Math.round(r.margeVar))}%</span>}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <span className={`inline-block px-2 py-0.5 rounded-md text-xs font-medium ${hasData ? heatPill(r.margePct) : 'text-slate-500'}`}>{fmtPct(r.margePct)}</span>
-                    </td>
+                    <td className={`py-3 px-4 text-right font-medium ${r.marge !== 0 ? margeColor(r.marge) : 'text-slate-500'}`}>{fmtEur(r.marge)}</td>
+                    <td className={`py-3 px-4 text-right font-medium ${r.margePct !== 0 ? margeColor(r.margePct) : 'text-slate-500'}`}>{fmtPct(r.margePct)}</td>
                     <td className={`py-3 px-4 text-right ${r.leads > 0 ? 'text-violet-300 font-medium' : 'text-slate-500'}`}>{r.leads}</td>
                   </tr>
                 );
@@ -1094,7 +1140,7 @@ function StatsView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab }) {
 }
 
 // ============== HISTORY VIEW ==============
-function HistoryView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab, deleteWeek }) {
+function HistoryView({ canWrite = true, weeks, currentWeekId, setCurrentWeekId, setActiveTab, deleteWeek }) {
   const [search, setSearch] = useState('');
   const [yearFilter, setYearFilter] = useState('all');
   const grouped = useMemo(() => { const g = {}; weeks.forEach(w => { const mk = getMonthKey(w.start_date); if (!g[mk]) g[mk] = []; g[mk].push({ ...w, stats: computeWeekStats(w) }); }); return g; }, [weeks]);
@@ -1144,7 +1190,7 @@ function HistoryView({ weeks, currentWeekId, setCurrentWeekId, setActiveTab, del
                       <Pill label="Coût" value={fmtEurShort(w.stats.totalCost)} color="amber" />
                       <Pill label="Marge" value={fmtEurShort(w.stats.totalMarge)} color={w.stats.totalMarge >= 0 ? 'emerald' : 'rose'} />
                       <Pill label="Leads" value={w.stats.totalLeads} color="violet" />
-                      <button onClick={() => deleteWeek(w.id)} className="text-rose-400 hover:text-rose-300 ml-2"><Trash2 size={15} /></button>
+                      <button onClick={() => deleteWeek(w.id)} className={`text-rose-400 hover:text-rose-300 ml-2 ${canWrite ? '' : 'hidden'}`}><Trash2 size={15} /></button>
                     </div>
                   </div>
                 );
@@ -1260,13 +1306,21 @@ function CostInput({ label, value, onChange }) {
   useEffect(() => setLocal(value), [value]);
   return <div className="flex items-center justify-between bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/40"><label className="text-sm text-slate-300 font-medium">{label}</label><input type="number" step="0.01" value={local} onChange={(e) => setLocal(e.target.value)} onBlur={() => { const n = Number(local) || 0; if (n !== Number(value)) onChange(n); }} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-right w-40 focus:border-fuchsia-500 focus:outline-none" /></div>;
 }
-function DebouncedInput({ value, onCommit, type = 'text', step, className }) {
+function DebouncedInput({ value, onCommit, type = 'text', step, className, readOnly = false }) {
   const [local, setLocal] = useState(value);
   useEffect(() => setLocal(value), [value]);
-  return <input type={type} step={step} value={local ?? ''} onChange={(e) => setLocal(e.target.value)} onBlur={() => { const newVal = type === 'number' ? (Number(local) || 0) : local; if (newVal !== value) onCommit(newVal); }} className={className} />;
+  if (readOnly) return <div className={`${className} cursor-default`}>{type === 'number' ? (Number(value) || 0) : value}</div>;
+  const commit = () => { const newVal = type === 'number' ? (Number(local) || 0) : local; if (newVal !== value) onCommit(newVal); };
+  return <input type={type} step={step} value={local ?? ''}
+    inputMode={type === 'number' ? (step ? 'decimal' : 'numeric') : undefined}
+    onChange={(e) => setLocal(e.target.value)}
+    onFocus={(e) => e.target.select()}
+    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } if (e.key === 'Escape') { setLocal(value); e.target.blur(); } }}
+    onBlur={commit}
+    className={className} />;
 }
 
-function LeadTable({ rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm, accent }) {
+function LeadTable({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm, accent }) {
   const accentBg = { cyan: 'bg-cyan-900/30', orange: 'bg-orange-900/30', red: 'bg-red-900/30' }[accent] || 'bg-slate-800';
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
   return (
@@ -1277,23 +1331,23 @@ function LeadTable({ rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm,
           {sorted.map(r => {
             const cpl = r.leads > 0 ? r.cost / r.leads : 0;
             return <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 group">
-              <td className="py-1.5 px-2"><DebouncedInput value={r.source_name} onCommit={(v) => onUpdate(r.id, { source_name: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
-              <td className="py-1.5 px-2"><DebouncedInput type="number" step="0.01" value={r.cost} onCommit={(v) => onUpdate(r.id, { cost: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
-              <td className="py-1.5 px-2"><DebouncedInput type="number" value={r.leads} onCommit={(v) => onUpdate(r.id, { leads: v })} className="w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
+              <td className="py-1.5 px-2"><DebouncedInput readOnly={!canWrite} value={r.source_name} onCommit={(v) => onUpdate(r.id, { source_name: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
+              <td className="py-1.5 px-2"><DebouncedInput readOnly={!canWrite} type="number" step="0.01" value={r.cost} onCommit={(v) => onUpdate(r.id, { cost: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
+              <td className="py-1.5 px-2"><DebouncedInput readOnly={!canWrite} type="number" value={r.leads} onCommit={(v) => onUpdate(r.id, { leads: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-slate-600" /></td>
               <td className="py-1.5 px-2 text-right text-slate-400">{fmtEur(cpl)}</td>
-              <td className="py-1.5 px-1"><button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={14} /></button></td>
+              <td className="py-1.5 px-1">{canWrite && <button onClick={() => onDelete(r.id)} className="md:opacity-0 md:group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={14} /></button>}</td>
             </tr>;
           })}
-          <tr className={`${accentBg} font-semibold`}><td className="py-2 px-2">TOTAL</td><td className="py-2 px-2 text-right">{fmtEur(totalCost)}</td><td className="py-2 px-2 text-right">{totalLeads}</td><td className="py-2 px-2 text-right text-slate-300">—</td><td></td></tr>
+          <tr className={`${accentBg} font-semibold`}><td className="py-2 px-2 sticky left-0 bg-slate-900 z-10">TOTAL</td><td className="py-2 px-2 text-right">{fmtEur(totalCost)}</td><td className="py-2 px-2 text-right">{totalLeads}</td><td className="py-2 px-2 text-right text-slate-300">—</td><td></td></tr>
           <tr className="text-slate-400 italic text-xs"><td className="py-1.5 px-2">CM du lead</td><td colSpan={3} className="py-1.5 px-2 text-right font-medium text-slate-300">{fmtEur(cm)}</td><td></td></tr>
         </tbody>
       </table>
-      <button onClick={onAdd} className="mt-2 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter une source</button>
+      {canWrite && <button onClick={onAdd} className="mt-2 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter une source</button>}
     </div>
   );
 }
 
-function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge, margePct }) {
+function SalesTable({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge, margePct, todayIdx = -1 }) {
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
   const DAYS = [
     { key: 'leads_mon', label: 'L' },
@@ -1304,6 +1358,7 @@ function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge,
     { key: 'leads_sat', label: 'S' },
     { key: 'leads_sun', label: 'D' },
   ];
+  const todayCol = (i) => i === todayIdx ? 'bg-cyan-500/10' : '';
   const sumDay = (key) => rows.reduce((s, r) => s + (Number(r[key]) || 0), 0);
   const rowTotal = (r) => DAYS.reduce((s, d) => s + (Number(r[d.key]) || 0), 0);
   const grandTotalLeads = rows.reduce((s, r) => s + rowTotal(r), 0);
@@ -1312,8 +1367,8 @@ function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge,
       <table className="w-full text-xs">
         <thead>
           <tr className="text-slate-300 border-b border-slate-600">
-            <th className="text-left py-2 px-1 font-medium">Client</th>
-            {DAYS.map((d, i) => <th key={i} className="text-center py-2 px-1 font-semibold w-7 text-cyan-400" title={['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'][i]}>{d.label}</th>)}
+            <th className="text-left py-2 px-1 font-medium sticky left-0 bg-slate-900 z-10 min-w-[110px]">Client</th>
+            {DAYS.map((d, i) => <th key={i} className={`text-center py-2 px-1 font-semibold w-7 ${i === todayIdx ? 'text-cyan-200 bg-cyan-500/20 rounded-t' : 'text-cyan-400'}`} title={['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'][i] + (i === todayIdx ? " (aujourd'hui)" : '')}>{d.label}</th>)}
             <th className="text-right py-2 px-1 font-semibold w-12 text-slate-200">Tot.</th>
             <th className="text-right py-2 px-1 font-medium w-16 text-amber-300">€/Lead</th>
             <th className="text-right py-2 px-1 font-medium w-20">CA</th>
@@ -1326,26 +1381,26 @@ function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge,
             const ppl = Number(r.price_per_lead) || 0;
             const computedCA = total * ppl;
             return <tr key={r.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 group">
-              <td className="py-1 px-1"><DebouncedInput value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600" /></td>
+              <td className="py-1 px-1 sticky left-0 bg-slate-900 z-10"><DebouncedInput readOnly={!canWrite} value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-1 py-0.5 rounded outline-none focus:ring-1 focus:ring-slate-600 truncate" /></td>
               {DAYS.map((d, i) => (
-                <td key={i} className="py-1 px-0.5">
-                  <DebouncedInput type="number" value={r[d.key]} onCommit={(v) => onUpdate(r.id, { [d.key]: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-0.5 py-0.5 rounded outline-none text-center focus:ring-1 focus:ring-slate-600" />
+                <td key={i} className={`py-1 px-0.5 ${todayCol(i)}`}>
+                  <DebouncedInput readOnly={!canWrite} type="number" value={r[d.key]} onCommit={(v) => onUpdate(r.id, { [d.key]: v })} className="w-full bg-transparent text-slate-100 focus:bg-slate-800 px-0.5 py-0.5 rounded outline-none text-center focus:ring-1 focus:ring-slate-600" />
                 </td>
               ))}
               <td className={`py-1 px-1 text-right font-bold bg-slate-800/50 ${total > 0 ? 'text-cyan-300' : 'text-slate-500'}`}>{total}</td>
               <td className="py-1 px-1">
-                <DebouncedInput type="number" step="0.01" value={r.price_per_lead || 0} onCommit={(v) => onUpdate(r.id, { price_per_lead: v, ca: rowTotal(r) * v })}
+                <DebouncedInput readOnly={!canWrite} type="number" step="0.01" value={r.price_per_lead || 0} onCommit={(v) => onUpdate(r.id, { price_per_lead: v, ca: rowTotal(r) * v })}
                   className={`w-full bg-transparent focus:bg-slate-800 px-1 py-0.5 rounded outline-none text-right focus:ring-1 focus:ring-amber-600 ${ppl > 0 ? 'text-amber-300 font-medium' : 'text-slate-500'}`} />
               </td>
               <td className={`py-1 px-1 text-right font-medium ${computedCA > 0 ? 'text-emerald-300' : 'text-slate-500'}`}>{fmtEur(computedCA)}</td>
-              <td className="py-1 px-0"><button onClick={() => onDelete(r.id)} className="opacity-0 group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={12} /></button></td>
+              <td className="py-1 px-0">{canWrite && <button onClick={() => onDelete(r.id)} className="md:opacity-0 md:group-hover:opacity-100 text-rose-400 hover:text-rose-300"><Trash2 size={12} /></button>}</td>
             </tr>;
           })}
           <tr className="bg-emerald-900/40 font-bold border-t border-emerald-700/40">
-            <td className="py-2 px-1 text-emerald-200">TOTAL</td>
+            <td className="py-2 px-1 text-emerald-200 sticky left-0 bg-slate-900 z-10">TOTAL</td>
             {DAYS.map((d, i) => {
               const v = sumDay(d.key);
-              return <td key={i} className={`text-center py-2 px-1 ${v > 0 ? 'text-emerald-200' : 'text-slate-500'}`}>{v}</td>;
+              return <td key={i} className={`text-center py-2 px-1 ${todayCol(i)} ${v > 0 ? 'text-emerald-200' : 'text-slate-500'}`}>{v}</td>;
             })}
             <td className={`py-2 px-1 text-right bg-emerald-800/40 ${grandTotalLeads > 0 ? 'text-emerald-100' : 'text-slate-400'}`}>{grandTotalLeads}</td>
             <td className="py-2 px-1"></td>
@@ -1359,7 +1414,7 @@ function SalesTable({ rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge,
           </tr>
         </tbody>
       </table>
-      <button onClick={onAdd} className="mt-2 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter un client</button>
+      {canWrite && <button onClick={onAdd} className="mt-2 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter un client</button>}
     </div>
   );
 }
