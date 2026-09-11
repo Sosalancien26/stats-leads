@@ -3,7 +3,7 @@ import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, Tren
 
 const SUPABASE_URL = 'https://yxfanlgklvpdpsrzcoqy.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SA4vTbf1FfOH2YNHtw3LJg_geqlOxpV';
-const APP_VERSION = '2.2';
+const APP_VERSION = '2.3';
 const CACHE_KEY = 'stats_leads_cache_v3';
 const SESSION_KEY = 'stats_leads_session_v2';
 
@@ -492,6 +492,19 @@ function WeekView({ canWrite = true, currentWeek, calc, range, sortedWeekIds, cu
     const d = new Date().getDay();
     return d === 0 ? 6 : d - 1;
   }, [currentWeek.start_date, currentWeek.end_date]);
+  // Numéro du jour (ex: "07") pour chaque colonne Lun→Dim, null si hors de la semaine affichée
+  const dayDates = useMemo(() => {
+    const localIso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const start = new Date(currentWeek.start_date + 'T00:00:00');
+    const endIso = currentWeek.end_date || addDays(currentWeek.start_date, 7);
+    const dow = start.getDay();
+    const monday = new Date(start); monday.setDate(start.getDate() + (dow === 0 ? -6 : 1 - dow));
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday); d.setDate(monday.getDate() + i);
+      const iso = localIso(d);
+      return (iso >= currentWeek.start_date && iso <= endIso) ? String(d.getDate()).padStart(2, '0') : null;
+    });
+  }, [currentWeek.start_date, currentWeek.end_date]);
   return (
     <div className="space-y-5">
       <div className="bg-gradient-to-r from-slate-900 via-slate-800/50 to-slate-900 rounded-2xl border border-slate-700/50 p-4 md:p-5 shadow-2xl">
@@ -576,12 +589,12 @@ function WeekView({ canWrite = true, currentWeek, calc, range, sortedWeekIds, cu
       {PRODUCTS.filter(p => !mobileProduct || p.key === mobileProduct).map(prod => {
         const stats = calc[prod.key.toLowerCase()];
         return (
-          <div key={prod.key} className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+          <div key={prod.key} className="grid grid-cols-1 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-5">
             <Card title={`${prod.label} — Leads`} accent={prod.color} icon={prod.icon}>
               <LeadTable canWrite={canWrite} rows={stats.leads} onUpdate={(id, patch) => updateRow('lead_sources', id, patch)} onDelete={(id) => deleteRow('lead_sources', id, currentWeek.id)} onAdd={() => addLeadSource(currentWeek.id, prod.key)} totalCost={stats.cost} totalLeads={stats.leadsCount} cm={stats.cm} accent={prod.color} />
             </Card>
             <Card title={`${prod.label} — Ventes`} accent="emerald" icon="💰">
-              <SalesTable canWrite={canWrite} todayIdx={todayIdx} rows={stats.sales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, prod.key)} totalCA={stats.ca} prodCost={stats.cost} marge={stats.marge} margePct={stats.margePct} />
+              <SalesTable canWrite={canWrite} todayIdx={todayIdx} dayDates={dayDates} rows={stats.sales} onUpdate={(id, patch) => updateRow('sales', id, patch)} onDelete={(id) => deleteRow('sales', id, currentWeek.id)} onAdd={() => addSale(currentWeek.id, prod.key)} totalCA={stats.ca} prodCost={stats.cost} marge={stats.marge} margePct={stats.margePct} />
             </Card>
           </div>
         );
@@ -1326,6 +1339,60 @@ function DebouncedInput({ value, onCommit, type = 'text', step, className, readO
 }
 
 function LeadTable({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm, accent }) {
+  const accentText = { cyan: 'text-cyan-300', orange: 'text-orange-300', red: 'text-red-300' }[accent] || 'text-slate-300';
+  const accentBg = { cyan: 'bg-cyan-500/15', orange: 'bg-orange-500/15', red: 'bg-red-500/15' }[accent] || 'bg-slate-800';
+  const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
+  const box = (val, focus = 'cyan') => `w-full h-9 flex items-center justify-end rounded-lg border px-2 text-right text-sm font-semibold tabular-nums outline-none transition border-slate-700/70 bg-slate-800/60 ${Number(val) > 0 ? 'text-slate-50' : 'text-slate-500'} focus:border-${focus}-400 focus:bg-slate-800 focus:ring-2 focus:ring-${focus}-500/30`;
+  return (
+    <div className="overflow-x-auto -mx-1 px-1">
+      <table className="border-separate" style={{ borderSpacing: '0 6px', minWidth: '100%' }}>
+        <thead>
+          <tr>
+            <th className="text-left text-xs font-medium text-slate-400 pb-1 pl-1 sticky left-0 bg-slate-900 z-10 min-w-[120px]">Source</th>
+            <th className="w-28 pb-1 text-right text-xs font-semibold text-amber-300 pr-2">Coût</th>
+            <th className="w-20 pb-1 text-right text-xs font-semibold text-slate-200 pr-2">Leads</th>
+            <th className="w-24 pb-1 text-right text-xs font-semibold text-slate-400 pr-1">€/Lead</th>
+            <th className="w-7"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map(r => {
+            const cpl = r.leads > 0 ? r.cost / r.leads : 0;
+            return (
+              <tr key={r.id} className="group">
+                <td className="sticky left-0 bg-slate-900 z-10 pr-2 pl-1">
+                  <DebouncedInput readOnly={!canWrite} value={r.source_name} onCommit={(v) => onUpdate(r.id, { source_name: v })} className="w-full h-9 flex items-center bg-transparent text-slate-100 text-sm font-medium px-1 rounded-md outline-none truncate focus:bg-slate-800 focus:ring-1 focus:ring-slate-600" />
+                </td>
+                <td className="px-1"><DebouncedInput readOnly={!canWrite} type="number" step="0.01" value={r.cost} onCommit={(v) => onUpdate(r.id, { cost: v })} className={box(r.cost, 'amber')} /></td>
+                <td className="px-1"><DebouncedInput readOnly={!canWrite} type="number" value={r.leads} onCommit={(v) => onUpdate(r.id, { leads: v })} className={box(r.leads, 'cyan')} /></td>
+                <td className={`text-right pr-1 text-sm tabular-nums whitespace-nowrap ${cpl > 0 ? 'text-slate-300' : 'text-slate-600'}`}>{cpl > 0 ? fmtEur(cpl) : '—'}</td>
+                <td className="text-center">{canWrite && <button onClick={() => onDelete(r.id)} className="md:opacity-0 md:group-hover:opacity-100 text-rose-400 hover:text-rose-300 p-1 transition" title="Supprimer"><Trash2 size={14} /></button>}</td>
+              </tr>
+            );
+          })}
+          <tr>
+            <td className={`sticky left-0 bg-slate-900 z-10 pl-1 pr-2 text-xs font-bold uppercase tracking-wide ${accentText}`}>Total</td>
+            <td className="px-1"><div className={`h-8 flex items-center justify-end px-2 rounded-lg text-sm font-black tabular-nums ${accentBg} text-slate-50`}>{fmtEur(totalCost)}</div></td>
+            <td className="px-1"><div className={`h-8 flex items-center justify-end px-2 rounded-lg text-sm font-black tabular-nums ${accentBg} text-slate-50`}>{totalLeads}</div></td>
+            <td className="text-right pr-1 text-sm font-bold tabular-nums text-slate-200 whitespace-nowrap">{fmtEur(cm)}</td>
+            <td></td>
+          </tr>
+          <tr>
+            <td colSpan={5}>
+              <div className="mt-1 flex items-center justify-between rounded-lg px-3 py-2 bg-slate-800/50 border border-slate-700/50">
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-300">Coût moyen du lead</span>
+                <span className="text-base font-black tabular-nums text-slate-100">{fmtEur(cm)}</span>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      {canWrite && <button onClick={onAdd} className="mt-1 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter une source</button>}
+    </div>
+  );
+}
+
+function LeadTableLegacy({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCost, totalLeads, cm, accent }) {
   const accentBg = { cyan: 'bg-cyan-900/30', orange: 'bg-orange-900/30', red: 'bg-red-900/30' }[accent] || 'bg-slate-800';
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
   return (
@@ -1352,7 +1419,111 @@ function LeadTable({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCost
   );
 }
 
-function SalesTable({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge, margePct, todayIdx = -1 }) {
+function SalesTable({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge, margePct, todayIdx = -1, dayDates = [] }) {
+  const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
+  const DAYS = [
+    { key: 'leads_mon', label: 'Lun' },
+    { key: 'leads_tue', label: 'Mar' },
+    { key: 'leads_wed', label: 'Mer' },
+    { key: 'leads_thu', label: 'Jeu' },
+    { key: 'leads_fri', label: 'Ven' },
+    { key: 'leads_sat', label: 'Sam' },
+    { key: 'leads_sun', label: 'Dim' },
+  ];
+  const sumDay = (key) => rows.reduce((s, r) => s + (Number(r[key]) || 0), 0);
+  const rowTotal = (r) => DAYS.reduce((s, d) => s + (Number(r[d.key]) || 0), 0);
+  const grandTotalLeads = rows.reduce((s, r) => s + rowTotal(r), 0);
+  const inWeek = (i) => dayDates.length === 0 || dayDates[i] !== null;
+  const isToday = (i) => i === todayIdx;
+
+  const cellBox = (val, i) => `w-11 h-9 mx-auto flex items-center justify-center rounded-lg border text-center text-[15px] font-semibold tabular-nums transition outline-none ` +
+    (isToday(i) ? 'border-cyan-500/70 bg-cyan-500/10 ' : 'border-slate-700/70 bg-slate-800/60 ') +
+    (Number(val) > 0 ? 'text-slate-50 ' : 'text-slate-500 ') +
+    'focus:border-cyan-400 focus:bg-slate-800 focus:ring-2 focus:ring-cyan-500/30';
+
+  return (
+    <div className="overflow-x-auto -mx-1 px-1">
+      <table className="border-separate" style={{ borderSpacing: '0 6px', minWidth: '100%' }}>
+        <thead>
+          <tr>
+            <th className="text-left text-xs font-medium text-slate-400 pb-1 pl-1 sticky left-0 bg-slate-900 z-10 min-w-[130px]">Client</th>
+            {DAYS.map((d, i) => (
+              <th key={i} className={`w-12 pb-1 text-center align-bottom ${inWeek(i) ? '' : 'opacity-35'}`}>
+                <div className={`inline-flex flex-col items-center leading-tight px-1.5 py-0.5 rounded-md ${isToday(i) ? 'bg-cyan-500/20 text-cyan-200' : 'text-slate-300'}`}>
+                  <span className="text-[11px] font-semibold uppercase">{d.label}</span>
+                  {dayDates[i] && <span className={`text-[10px] ${isToday(i) ? 'text-cyan-300' : 'text-slate-500'}`}>{dayDates[i]}</span>}
+                </div>
+              </th>
+            ))}
+            <th className="w-14 pb-1 text-center text-xs font-semibold text-slate-200">Total</th>
+            <th className="w-20 pb-1 text-center text-xs font-semibold text-amber-300">€/Lead</th>
+            <th className="w-24 pb-1 text-right text-xs font-semibold text-emerald-300 pr-1">CA</th>
+            <th className="w-7"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map(r => {
+            const total = rowTotal(r);
+            const ppl = Number(r.price_per_lead) || 0;
+            const computedCA = total * ppl;
+            return (
+              <tr key={r.id} className="group">
+                <td className="sticky left-0 bg-slate-900 z-10 pr-2 pl-1">
+                  <DebouncedInput readOnly={!canWrite} value={r.client_name} onCommit={(v) => onUpdate(r.id, { client_name: v })}
+                    className="w-full h-9 flex items-center bg-transparent text-slate-100 text-sm font-medium px-1 rounded-md outline-none truncate focus:bg-slate-800 focus:ring-1 focus:ring-slate-600" />
+                </td>
+                {DAYS.map((d, i) => (
+                  <td key={i} className={`px-0.5 ${inWeek(i) ? '' : 'opacity-35'}`}>
+                    <DebouncedInput readOnly={!canWrite} type="number" value={r[d.key]} onCommit={(v) => onUpdate(r.id, { [d.key]: v })} className={cellBox(r[d.key], i)} />
+                  </td>
+                ))}
+                <td className="px-1">
+                  <div className={`h-9 flex items-center justify-center rounded-lg text-[15px] font-bold tabular-nums ${total > 0 ? 'bg-cyan-500/15 text-cyan-200 border border-cyan-500/30' : 'bg-slate-800/40 text-slate-500 border border-slate-800'}`}>{total}</div>
+                </td>
+                <td className="px-1">
+                  <DebouncedInput readOnly={!canWrite} type="number" step="0.01" value={r.price_per_lead || 0} onCommit={(v) => onUpdate(r.id, { price_per_lead: v, ca: rowTotal(r) * v })}
+                    className={`w-full h-9 flex items-center justify-center rounded-lg border text-center text-sm font-semibold tabular-nums outline-none transition ${ppl > 0 ? 'border-amber-600/50 bg-amber-500/10 text-amber-200' : 'border-slate-700/70 bg-slate-800/60 text-slate-500'} focus:border-amber-400 focus:ring-2 focus:ring-amber-500/30`} />
+                </td>
+                <td className={`text-right pr-1 text-sm font-bold tabular-nums whitespace-nowrap ${computedCA > 0 ? 'text-emerald-300' : 'text-slate-500'}`}>{fmtEur(computedCA)}</td>
+                <td className="text-center">{canWrite && <button onClick={() => onDelete(r.id)} className="md:opacity-0 md:group-hover:opacity-100 text-rose-400 hover:text-rose-300 p-1 transition" title="Supprimer"><Trash2 size={14} /></button>}</td>
+              </tr>
+            );
+          })}
+
+          <tr>
+            <td className="sticky left-0 bg-slate-900 z-10 pl-1 pr-2 text-xs font-bold uppercase tracking-wide text-emerald-300">Total</td>
+            {DAYS.map((d, i) => {
+              const v = sumDay(d.key);
+              return (
+                <td key={i} className={`px-0.5 ${inWeek(i) ? '' : 'opacity-35'}`}>
+                  <div className={`w-11 h-8 mx-auto flex items-center justify-center rounded-lg text-sm font-bold tabular-nums ${v > 0 ? 'bg-emerald-500/15 text-emerald-200' : 'bg-slate-800/30 text-slate-600'} ${isToday(i) ? 'ring-1 ring-cyan-500/40' : ''}`}>{v}</div>
+                </td>
+              );
+            })}
+            <td className="px-1">
+              <div className={`h-8 flex items-center justify-center rounded-lg text-base font-black tabular-nums ${grandTotalLeads > 0 ? 'bg-emerald-500/25 text-emerald-100' : 'bg-slate-800/40 text-slate-500'}`}>{grandTotalLeads}</div>
+            </td>
+            <td></td>
+            <td className="text-right pr-1 text-sm font-black tabular-nums text-emerald-200 whitespace-nowrap">{fmtEur(totalCA)}</td>
+            <td></td>
+          </tr>
+
+          <tr>
+            <td colSpan={DAYS.length + 5}>
+              <div className={`mt-1 flex items-center justify-between rounded-lg px-3 py-2 border ${marge >= 0 ? 'bg-emerald-900/30 border-emerald-700/40' : 'bg-rose-900/30 border-rose-700/40'}`}>
+                <span className="text-xs font-semibold uppercase tracking-wide text-slate-300">Marge auto <span className="text-slate-500 normal-case font-normal">(CA − coût leads)</span></span>
+                <span className={`text-base font-black tabular-nums ${marge >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{fmtEur(marge)} <span className="text-xs font-semibold opacity-80">({fmtPct(margePct)})</span></span>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      {canWrite && <button onClick={onAdd} className="mt-1 text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1"><Plus size={12} /> Ajouter un client</button>}
+    </div>
+  );
+}
+
+function SalesTableLegacy({ canWrite = true, rows, onUpdate, onDelete, onAdd, totalCA, prodCost, marge, margePct, todayIdx = -1 }) {
   const sorted = [...rows].sort((a, b) => (a.position || 0) - (b.position || 0));
   const DAYS = [
     { key: 'leads_mon', label: 'L' },
