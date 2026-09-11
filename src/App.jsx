@@ -3,7 +3,7 @@ import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, Tren
 
 const SUPABASE_URL = 'https://yxfanlgklvpdpsrzcoqy.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SA4vTbf1FfOH2YNHtw3LJg_geqlOxpV';
-const APP_VERSION = '2.1';
+const APP_VERSION = '2.2';
 const CACHE_KEY = 'stats_leads_cache_v3';
 const SESSION_KEY = 'stats_leads_session_v2';
 
@@ -900,9 +900,9 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
           <>
             {PRODUCTS.map(prod => {
               const stats = calc[prod.key.toLowerCase()];
-              const clients = stats.sales.filter(s => Number(s.ca) > 0);
+              const clients = stats.sales.filter(s => rowCA(s) > 0);
               if (clients.length === 0) return null;
-              const productTotal = clients.reduce((sum, c) => sum + Number(c.ca || 0), 0);
+              const productTotal = clients.reduce((sum, c) => sum + rowCA(c), 0);
               return (
                 <div key={prod.key} className="mb-2 pdf-section">
                   <h2 className="text-[11px] font-bold text-slate-900 border-b border-slate-300 pb-0.5 mb-1 flex items-center justify-between">
@@ -913,7 +913,8 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
                     <thead className="bg-slate-100">
                       <tr>
                         <th className="text-left px-2 py-1 border-b border-slate-300">Client</th>
-                        <th className="text-right px-2 py-1 border-b border-slate-300 w-16">Leads</th>
+                        <th className="text-right px-2 py-1 border-b border-slate-300 w-12">Leads</th>
+                        <th className="text-right px-2 py-1 border-b border-slate-300 w-16">€/Lead</th>
                         <th className="text-right px-2 py-1 border-b border-slate-300 w-24">Montant</th>
                       </tr>
                     </thead>
@@ -921,8 +922,9 @@ function InvoicePdfModal({ currentWeek, calc, range, session, onClose }) {
                       {[...clients].sort((a, b) => a.position - b.position).map(c => (
                         <tr key={c.id} className="border-b border-slate-200">
                           <td className="px-2 py-1 font-medium">{c.client_name}</td>
-                          <td className="text-right px-2 py-1">{c.leads}</td>
-                          <td className="text-right px-2 py-1 font-bold text-amber-700">{fmtEur(c.ca)}</td>
+                          <td className="text-right px-2 py-1">{rowDays(c)}</td>
+                          <td className="text-right px-2 py-1">{fmtEur(Number(c.price_per_lead) || 0)}</td>
+                          <td className="text-right px-2 py-1 font-bold text-amber-700">{fmtEur(rowCA(c))}</td>
                         </tr>
                       ))}
                     </tbody>
