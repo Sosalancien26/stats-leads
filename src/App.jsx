@@ -3,6 +3,7 @@ import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, Tren
 
 const SUPABASE_URL = 'https://yxfanlgklvpdpsrzcoqy.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SA4vTbf1FfOH2YNHtw3LJg_geqlOxpV';
+const APP_VERSION = '2.1';
 const CACHE_KEY = 'stats_leads_cache_v3';
 const SESSION_KEY = 'stats_leads_session_v2';
 
@@ -175,6 +176,7 @@ function LoginScreen() {
           <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-500 to-violet-600 flex items-center justify-center shadow-lg shadow-cyan-500/30 mb-3"><BarChart3 size={28} className="text-white" /></div>
           <h1 className="text-2xl font-bold text-slate-100">Stats Leads</h1>
           <p className="text-sm text-slate-400 mt-1">Connecte-toi à ton tableau de bord</p>
+          <p className="text-[10px] text-slate-600 mt-1">v{APP_VERSION}</p>
         </div>
         <div className="space-y-3">
           <div><label className="text-xs text-slate-400 uppercase tracking-wide mb-1 block">Prénom</label><input type="text" value={username} onChange={(e) => setUsername(e.target.value)} className="w-full bg-slate-800 border border-slate-700 rounded-lg px-4 py-2.5 text-slate-100 focus:border-cyan-500 focus:outline-none" placeholder="greg, sacha, elie..." autoComplete="username" autoCapitalize="none" /></div>
@@ -244,7 +246,8 @@ function StatsLeads({ session }) {
 
   useEffect(() => { try { if (weeks.length) localStorage.setItem(CACHE_KEY, JSON.stringify(weeks)); } catch (e) {} }, [weeks]);
 
-  const canWrite = session.canWrite === true;
+  // Droit d'écriture déduit du nom d'utilisateur à chaque chargement (le serveur vérifie de toute façon)
+  const canWrite = (session.username || '').toLowerCase() === 'sacha';
 
   const loadWeeks = useCallback(async () => {
     try {
@@ -440,7 +443,7 @@ function StatsLeads({ session }) {
         {activeTab === 'monthly' && <MonthlyView weeks={weeks} />}
       </div>
 
-      <div className="text-center text-xs text-slate-500 py-6 pb-24 md:pb-6">{weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Sécurisé par token{lastSync && <> • maj {lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</>} • <span className="hidden md:inline">Ctrl+N (nouvelle), Ctrl+D (dupliquer), Ctrl+P (PDF)</span></div>
+      <div className="text-center text-xs text-slate-500 py-6 pb-24 md:pb-6">v{APP_VERSION} • {weeks.length} semaine{weeks.length > 1 ? 's' : ''} • Sécurisé par token{lastSync && <> • maj {lastSync.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</>} • <span className="hidden md:inline">Ctrl+N (nouvelle), Ctrl+D (dupliquer), Ctrl+P (PDF)</span></div>
 
       {/* Barre de navigation mobile (bas d'écran) */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-30 bg-slate-950/95 backdrop-blur-lg border-t border-slate-800" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
