@@ -4,7 +4,7 @@ import { Calendar, Plus, Trash2, Copy, Download, ChevronLeft, ChevronRight, Tren
 // ============== CONFIG ==============
 const SUPABASE_URL = 'https://yxfanlgklvpdpsrzcoqy.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_SA4vTbf1FfOH2YNHtw3LJg_geqlOxpV';
-const APP_VERSION = '3.1';
+const APP_VERSION = '3.2';
 const CACHE_KEY = 'stats_leads_cache_v3';
 const SESSION_KEY = 'stats_leads_session_v2';
 
@@ -111,13 +111,14 @@ const computeWeekStats = (w) => {
   const ite = computeProductStats(w, 'ITE'), pv = computeProductStats(w, 'PV'), pac = computeProductStats(w, 'PAC');
   const totalLeadsCost = ite.cost + pv.cost + pac.cost;
   const totalSalesLeads = ite.salesLeads + pv.salesLeads + pac.salesLeads;
-  const cesarEnabled = w.cesar_enabled !== false; // case à cocher par semaine (actif par défaut)
+  const cesarEnabled = w.cesar_enabled !== false; // cases à cocher par semaine (actives par défaut)
+  const sachaEnabled = w.sacha_enabled !== false;
   const cesarCost = cesarEnabled ? totalLeadsCost * 0.10 : 0;   // 10 % du coût total des leads
-  const sachaCost = totalSalesLeads * 0.50;  // 0,50 € par lead vendu
+  const sachaCost = sachaEnabled ? totalSalesLeads * 0.50 : 0;  // 0,50 € par lead vendu
   const totalCA = ite.ca + pv.ca + pac.ca;
   const totalCost = totalLeadsCost + cesarCost + sachaCost;
   const totalMarge = totalCA - totalCost;
-  return { ite, pv, pac, cesarEnabled, cesarCost, sachaCost, cesarMarge: -cesarCost, sachaMarge: -sachaCost, totalCA, totalCost, totalMarge, totalLeads: ite.leadsCount + pv.leadsCount + pac.leadsCount, totalSalesLeads, totalLeadsCost, totalMargePct: totalCost > 0 ? (totalMarge / totalCost) * 100 : 0 };
+  return { ite, pv, pac, cesarEnabled, sachaEnabled, cesarCost, sachaCost, cesarMarge: -cesarCost, sachaMarge: -sachaCost, totalCA, totalCost, totalMarge, totalLeads: ite.leadsCount + pv.leadsCount + pac.leadsCount, totalSalesLeads, totalLeadsCost, totalMargePct: totalCost > 0 ? (totalMarge / totalCost) * 100 : 0 };
 };
 
 // ============== TOAST ==============
@@ -535,7 +536,16 @@ function WeekView({ canWrite, currentWeek, calc, prevCalc, prevWeek, range, sort
             </div>
             <div className="text-xs text-slate-500">{calc.cesarEnabled ? `10 % du coût total des leads (${fmtEur(calc.totalLeadsCost)})` : 'Non compté cette semaine'}</div>
           </div>
-          <div className="bg-slate-900/50 rounded-lg px-4 py-3 border border-slate-700/40"><div className="flex justify-between items-center mb-1"><span className="text-sm text-slate-300 font-medium">Coût Sacha</span><span className="text-lg font-bold text-fuchsia-300">{fmtEur(calc.sachaCost)}</span></div><div className="text-xs text-slate-500">0,50 € × {calc.totalSalesLeads} leads vendus</div></div>
+          <div className={`bg-slate-900/50 rounded-lg px-4 py-3 border transition ${calc.sachaEnabled ? 'border-slate-700/40' : 'border-slate-800 opacity-60'}`}>
+            <div className="flex justify-between items-center mb-1">
+              <label className={`flex items-center gap-2 text-sm font-medium ${canWrite ? 'cursor-pointer' : ''}`}>
+                <input type="checkbox" checked={calc.sachaEnabled} disabled={!canWrite} onChange={(e) => patchWeek(currentWeek.id, { sacha_enabled: e.target.checked })} className="w-4 h-4 rounded accent-fuchsia-500" />
+                <span className={calc.sachaEnabled ? 'text-slate-300' : 'text-slate-500 line-through'}>Coût Sacha</span>
+              </label>
+              <span className={`text-lg font-bold ${calc.sachaEnabled ? 'text-fuchsia-300' : 'text-slate-500'}`}>{fmtEur(calc.sachaEnabled ? calc.sachaCost : calc.totalSalesLeads * 0.50)}</span>
+            </div>
+            <div className="text-xs text-slate-500">{calc.sachaEnabled ? `0,50 € × ${calc.totalSalesLeads} leads vendus` : 'Non compté cette semaine'}</div>
+          </div>
         </div>
       </Card>
 
@@ -554,7 +564,7 @@ function MargeGlobale({ calc, title }) {
           <tbody>
             {PRODUCTS.map(prod => { const s = calc[prod.key.toLowerCase()]; return <MargeRow key={prod.key} label={prod.label} ca={s.ca} cost={s.cost} marge={s.marge} pct={s.cost > 0 ? (s.marge / s.cost) * 100 : 0} />; })}
             <MargeRow label={calc.cesarEnabled === false ? 'CESAR (désactivé)' : 'CESAR (10%)'} ca={0} cost={calc.cesarCost} marge={-calc.cesarCost} pct={calc.cesarCost > 0 ? -100 : 0} />
-            <MargeRow label="SACHA (0,50€/lead)" ca={0} cost={calc.sachaCost} marge={-calc.sachaCost} pct={calc.sachaCost > 0 ? -100 : 0} />
+            <MargeRow label={calc.sachaEnabled === false ? 'SACHA (désactivé)' : 'SACHA (0,50€/lead)'} ca={0} cost={calc.sachaCost} marge={-calc.sachaCost} pct={calc.sachaCost > 0 ? -100 : 0} />
             <tr className="border-t-2 border-violet-700 font-bold bg-violet-900/40"><td className="py-3 px-3 text-violet-100">TOTAL</td><td className="py-3 px-3 text-right text-violet-100">{fmtEur(calc.totalCA)}</td><td className="py-3 px-3 text-right text-violet-100">{fmtEur(calc.totalCost)}</td><td className={`py-3 px-3 text-right ${margeColor(calc.totalMarge)}`}>{fmtEur(calc.totalMarge)}</td><td className={`py-3 px-3 text-right ${margeColor(calc.totalMargePct)}`}>{fmtPct(calc.totalMargePct)}</td></tr>
           </tbody>
         </table>
